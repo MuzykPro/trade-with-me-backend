@@ -5,6 +5,7 @@ pub mod metadata_cache;
 pub mod routes;
 pub mod tokens_fetcher;
 pub mod db;
+pub mod metadata_repository;
 
 // token holder address: 87UGBXfeuCaMyxNnCD3a9Wcbjc5C8c34hbKEBUfc2F86
 #[tokio::main]
