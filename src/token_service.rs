@@ -1,9 +1,8 @@
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
-use tokio::sync::Mutex;
 
 use crate::metadata_cache::MetadataCache;
 

@@ -1,8 +1,6 @@
 use std::sync::Arc;
 use std::collections::HashSet;
-use std::fs;
 use std::io::Cursor;
-use std::path::Path;
 
 use anyhow::Result;
 use image::ImageFormat;
@@ -53,7 +51,7 @@ impl MetadataCache {
             image: resized_image,
         };
         self.known_mint_addresses.write().await.insert(mint_address.to_string());
-        self.metadata_repository.insert_metadata(&new_metadata);
+        let _ = self.metadata_repository.insert_metadata(&new_metadata);
         Ok(new_metadata)
     }
 
@@ -62,13 +60,6 @@ impl MetadataCache {
         let metadata_pubkey = MetadataCache::derive_metadata_account(&mint_pubkey);
         let account_data = self.rpc_client.get_account_data(&metadata_pubkey).await?;
         let metadata: Metadata = Metadata::from_bytes(&account_data)?;
-        let image_maybe = MetadataCache::follow_uri_to_get_image(&metadata.uri).await;
-        if let Some(image) = image_maybe {
-            let resized_maybe = MetadataCache::resize_image(&image);
-            if let Some(resized) = resized_maybe {
-                MetadataCache::save_image(&resized, &metadata.mint.to_string());
-            }
-        }
         Ok(metadata)
     }
     
@@ -130,27 +121,5 @@ impl MetadataCache {
             buf.into_inner()
         })
         .ok()
-    }
-    
-    fn save_image(image: &[u8], mint_address: &str) -> Result<()> {
-        let folder_path = format!("{}/{}", "metadata/tokens", mint_address);
-        let file_name = "token_icon_64_64.png";
-    
-        if !Path::new(&folder_path).exists() {
-            fs::create_dir_all(&folder_path)?; // Creates all missing parent directories
-            println!("Folder '{}' created.", folder_path);
-        } else {
-            println!("Folder '{}' already exists.", folder_path);
-        }
-    
-        let file_path = format!("{}/{}", folder_path, file_name);
-    
-        // Write the image data to the file
-        if let Err(e) = fs::write(&file_path, &image) {
-            eprintln!("Failed to write image to file: {}", e);
-        } else {
-            println!("Image saved successfully to {}", file_path);
-        }
-        Ok(())
     }
 }

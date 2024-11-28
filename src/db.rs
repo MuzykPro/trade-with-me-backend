@@ -1,17 +1,20 @@
-use rusqlite::Connection;
+use r2d2::{Pool, PooledConnection};
+use r2d2_sqlite::SqliteConnectionManager;
 
 pub struct SqliteDbClient {
-    connection: Connection,
+    pool: Pool<SqliteConnectionManager>
 }
 
 impl SqliteDbClient {
-    pub fn get_db_connection(&self) -> &Connection {
-        &self.connection
+    pub fn get_db_connection(&self) -> PooledConnection<SqliteConnectionManager> {
+        self.pool.get().unwrap()
     }
 
     pub fn init() -> Result<Self, Box<dyn std::error::Error>> {
-        let connection = Connection::open("trade_with_me.db")?;
+        let manager = SqliteConnectionManager::file("trade_with_me.db");
+        let pool = Pool::new(manager).expect("Failed to create pool.");
 
+        let connection = pool.get()?;
         connection.execute(
             "CREATE TABLE IF NOT EXISTS metadata (
                 mint_address TEXT PRIMARY KEY,
@@ -24,6 +27,6 @@ impl SqliteDbClient {
             [],
         )?;
 
-        Ok(SqliteDbClient { connection })
+        Ok(SqliteDbClient { pool })
     }
 }

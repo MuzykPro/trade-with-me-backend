@@ -1,4 +1,4 @@
-use std::{cell::RefCell, sync::Arc};
+use std::sync::Arc;
 
 use db::SqliteDbClient;
 use metadata_cache::MetadataCache;
@@ -6,7 +6,6 @@ use metadata_repository::MetadataRepository;
 use routes::{get_router, AppState};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use token_service::TokenService;
-use tokio::sync::Mutex;
 
 pub mod metadata_cache;
 pub mod routes;
