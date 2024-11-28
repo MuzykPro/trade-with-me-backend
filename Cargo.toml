@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.93"
 axum = "0.7.9"
+base64 = "0.22.1"
 image = "0.25.5"
 mpl-token-metadata = "5.1.0"
 r2d2 = "0.8.10"

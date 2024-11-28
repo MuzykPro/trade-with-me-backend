@@ -1,5 +1,5 @@
 use std::sync::Arc;
-
+use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
@@ -70,6 +70,7 @@ impl TokenService {
                                 .as_ref()
                                 .map(|m| m.uri.clone().trim_end_matches(char::from(0)).to_string())
                                 .ok(),
+                                image: metadata.as_ref().map(|m| TokenService::encode_image_to_data_url(&m.image)).ok()
                         });
                     }
                 }
@@ -89,6 +90,14 @@ impl TokenService {
 
         amount == 1 && decimals == 0
     }
+
+    fn encode_image_to_data_url(image_data: &[u8]) -> String {
+        if image_data.is_empty() {
+            return "".to_string()
+        }
+        let base64_string = general_purpose::STANDARD.encode(image_data);
+        format!("data:image/png;base64,{}", base64_string)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -100,4 +109,5 @@ pub struct TokenAccount {
     pub name: Option<String>,
     pub symbol: Option<String>,
     pub uri: Option<String>,
+    pub image: Option<String>,
 }

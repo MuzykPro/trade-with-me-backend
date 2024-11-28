@@ -13,7 +13,7 @@ pub mod token_service;
 pub mod db;
 pub mod metadata_repository;
 
-// token holder address: 87UGBXfeuCaMyxNnCD3a9Wcbjc5C8c34hbKEBUfc2F86
+// example token holder address: 87UGBXfeuCaMyxNnCD3a9Wcbjc5C8c34hbKEBUfc2F86
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sqlite_db_client = SqliteDbClient::init()?;
