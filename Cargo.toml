@@ -7,6 +7,7 @@ edition = "2021"
 anyhow = "1.0.93"
 axum = "0.7.9"
 base64 = "0.22.1"
+diesel = { version = "2.2.5", features = ["postgres"] }
 figment = { version = "0.10.19", features = ["yaml"] }
 image = "0.25.5"
 mpl-token-metadata = "5.1.0"

@@ -1,8 +1,8 @@
 FROM postgres:latest
 
-ENV POSTGRES_USER=myuser
-ENV POSTGRES_PASSWORD=mypassword
-ENV POSTGRES_DB=mydatabase
+ENV POSTGRES_USER=trade_user
+ENV POSTGRES_PASSWORD=password_trade_123
+ENV POSTGRES_DB=trade_with_me
 
 EXPOSE 5432
 
