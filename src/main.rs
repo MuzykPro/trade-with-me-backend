@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use config::Config;
 use db::SqliteDbClient;
+use figment::{providers::{Format, Yaml}, Figment};
 use metadata_cache::MetadataCache;
 use metadata_repository::MetadataRepository;
 use routes::{get_router, AppState};
@@ -12,10 +14,15 @@ pub mod routes;
 pub mod token_service;
 pub mod db;
 pub mod metadata_repository;
+pub mod config;
 
 // example token holder address: 87UGBXfeuCaMyxNnCD3a9Wcbjc5C8c34hbKEBUfc2F86
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config: Config = Figment::new()
+        .merge(Yaml::file("config.yaml"))
+        .extract()?;
+    
     let sqlite_db_client = SqliteDbClient::init()?;
     let rpc_url = "https://api.mainnet-beta.solana.com".to_string();
     let rpc_client = Arc::new(RpcClient::new(rpc_url));

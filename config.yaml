@@ -1,0 +1,4 @@
+postgres:
+  url: "localhost"
+  user: "myuser"
+  password: "mypassword"

@@ -30,3 +30,11 @@ impl SqliteDbClient {
         Ok(SqliteDbClient { pool })
     }
 }
+
+pub struct PostgreSqlClient {
+    
+}
+
+impl PostgreSqlClient {
+    
+}
