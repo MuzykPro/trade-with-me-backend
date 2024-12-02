@@ -1,8 +1,8 @@
-use std::sync::Arc;
 use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
+use std::sync::Arc;
 
 use crate::metadata_cache::MetadataCache;
 
@@ -23,10 +23,10 @@ impl TokenService {
         &self,
         wallet_address: &str,
     ) -> Result<Vec<TokenAccount>, Box<dyn std::error::Error>> {
-        
         let wallet_pubkey = Pubkey::try_from(wallet_address)?;
 
-        let token_accounts = self.rpc_client
+        let token_accounts = self
+            .rpc_client
             .get_token_accounts_by_owner(
                 &wallet_pubkey,
                 solana_client::rpc_request::TokenAccountsFilter::ProgramId(Pubkey::try_from(
@@ -50,27 +50,30 @@ impl TokenService {
                     let is_nft = TokenService::is_nft(token_amount);
 
                     if balance > 0.0 {
-                        let metadata = self.metadata_cache.get_token_metadata(&mint).await;
+                        let metadata = self.metadata_cache.get_token_metadata(&mint).await.ok();
                         balances.push(TokenAccount {
                             token_account: keyed_account.pubkey.to_string(),
                             mint,
                             balance,
                             is_nft,
-                            symbol: metadata
-                                .as_ref()
-                                .map(|m| {
-                                    m.symbol.clone().trim_end_matches(char::from(0)).to_string()
-                                })
-                                .ok(),
-                            name: metadata
-                                .as_ref()
-                                .map(|m| m.name.clone().trim_end_matches(char::from(0)).to_string())
-                                .ok(),
-                            uri: metadata
-                                .as_ref()
-                                .map(|m| m.uri.clone().trim_end_matches(char::from(0)).to_string())
-                                .ok(),
-                                image: metadata.as_ref().map(|m| TokenService::encode_image_to_data_url(&m.image)).ok()
+                            symbol: metadata.as_ref().and_then(|m| {
+                                m.symbol.as_ref()
+                                    .map(|s| s.trim_end_matches(char::from(0)).to_string())
+                                    .clone()
+                            }),
+                            name: metadata.as_ref().and_then(|m| {
+                                m.name.as_ref()
+                                    .map(|n| n.trim_end_matches(char::from(0)).to_string())
+                                    .clone()
+                            }),
+                            uri: metadata.as_ref().and_then(|m| {
+                                m.uri.as_ref()
+                                    .map(|u| u.trim_end_matches(char::from(0)).to_string())
+                                    .clone()
+                            }),
+                            image: metadata.as_ref().and_then(|m| {
+                                m.image.as_ref().map(|i| TokenService::encode_image_to_data_url(&i))
+                            }),
                         });
                     }
                 }
@@ -93,7 +96,7 @@ impl TokenService {
 
     fn encode_image_to_data_url(image_data: &[u8]) -> String {
         if image_data.is_empty() {
-            return "".to_string()
+            return "".to_string();
         }
         let base64_string = general_purpose::STANDARD.encode(image_data);
         format!("data:image/png;base64,{}", base64_string)

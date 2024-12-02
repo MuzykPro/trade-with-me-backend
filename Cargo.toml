@@ -7,14 +7,14 @@ edition = "2021"
 anyhow = "1.0.93"
 axum = "0.7.9"
 base64 = "0.22.1"
-diesel = { version = "2.2.5", features = ["postgres"] }
+diesel = { version = "2.2.5", features = ["postgres", "r2d2"] }
+env_logger = "0.11.5"
 figment = { version = "0.10.19", features = ["yaml"] }
 image = "0.25.5"
+log = "0.4.22"
 mpl-token-metadata = "5.1.0"
 r2d2 = "0.8.10"
-r2d2_sqlite = "0.25.0"
 reqwest = "0.12.9"
-rusqlite = { version = "0.32.1", features = ["bundled"] }
 serde = { version = "1.0.215", features = ["derive"] }
 serde_json = "1.0.133"
 solana-account-decoder = "2.1.2"

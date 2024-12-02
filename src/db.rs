@@ -1,40 +1,33 @@
+use diesel::{r2d2::ConnectionManager, PgConnection};
+use log::info;
 use r2d2::{Pool, PooledConnection};
-use r2d2_sqlite::SqliteConnectionManager;
 
-pub struct SqliteDbClient {
-    pool: Pool<SqliteConnectionManager>
-}
+use crate::config::PostgresConfig;
 
-impl SqliteDbClient {
-    pub fn get_db_connection(&self) -> PooledConnection<SqliteConnectionManager> {
-        self.pool.get().unwrap()
-    }
-
-    pub fn init() -> Result<Self, Box<dyn std::error::Error>> {
-        let manager = SqliteConnectionManager::file("trade_with_me.db");
-        let pool = Pool::new(manager).expect("Failed to create pool.");
-
-        let connection = pool.get()?;
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS metadata (
-                mint_address TEXT PRIMARY KEY,
-                name TEXT,
-                symbol TEXT,
-                uri TEXT,
-                is_nft INTEGER,
-                image BLOB
-            )",
-            [],
-        )?;
-
-        Ok(SqliteDbClient { pool })
-    }
-}
-
+type PgPool = Pool<ConnectionManager<PgConnection>>;
 pub struct PostgreSqlClient {
-    
+    pool: PgPool,
 }
 
 impl PostgreSqlClient {
-    
+    pub fn init(config: &PostgresConfig) -> Result<Self, Box<dyn std::error::Error>> {
+        let database_url = format!(
+            "postgres://{}:{}@{}:{}/{}",
+            config.user, config.password, config.host, config.port, config.database
+        );
+        let manager = ConnectionManager::<PgConnection>::new(database_url);
+        let pool = Pool::builder()
+            .build(manager)
+            .expect("Failed to create pool.");
+
+        info!("Successfully connected to postgres database");
+
+        Ok(PostgreSqlClient { pool })
+    }
+
+    pub fn get_db_connection(
+        &self,
+    ) -> Result<PooledConnection<ConnectionManager<PgConnection>>, r2d2::Error> {
+        self.pool.get()
+    }
 }

@@ -28,3 +28,5 @@ else
   echo "An error occurred while running migrations."
   exit 1
 fi
+
+diesel print-schema > src/schema.rs

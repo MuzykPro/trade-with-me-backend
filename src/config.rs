@@ -7,7 +7,9 @@ pub struct Config {
 
 #[derive(Debug, Deserialize)]
 pub struct PostgresConfig {
-    pub url: String,
+    pub host: String,
+    pub port: u16,
     pub user: String,
     pub password: String,
+    pub database: String
 }

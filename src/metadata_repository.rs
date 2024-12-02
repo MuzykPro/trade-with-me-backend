@@ -1,62 +1,49 @@
 
-use rusqlite::params;
-
-use crate::db::SqliteDbClient;
-
+use diesel::prelude::*;
+use serde::{Deserialize, Serialize};
+use crate::db::PostgreSqlClient;
+use crate::schema::metadata;
+use crate::schema::metadata::dsl::metadata as metadata_table;
+use crate::schema::metadata::dsl::mint_address;
 pub struct MetadataRepository {
-    db: SqliteDbClient,
+    db: PostgreSqlClient,
 }
 
 impl MetadataRepository {
-    pub fn new(db_client: SqliteDbClient) -> Self {
+    pub fn new(db_client: PostgreSqlClient) -> Self {
         MetadataRepository { db: db_client }
     }
 
-    pub fn insert_metadata(&self, metadata: &MetadataEntity) -> Result<(), Box<dyn std::error::Error>> {
-        let conn = self.db.get_db_connection();
-
-        conn.execute("INSERT INTO metadata (mint_address, name, symbol, uri, image) VALUES (?1, ?2, ?3, ?4, ?5)",
-         params![metadata.mint_address, metadata.name, metadata.symbol, metadata.uri, metadata.image])?;
-
-         Ok(())
+    pub fn insert_metadata(&self, metadata_entity: &MetadataEntity) -> Result<(), Box<dyn std::error::Error>> {
+        let mut conn = self.db.get_db_connection()?;
+        diesel::insert_into(metadata_table)
+            .values(metadata_entity)
+            .execute(&mut conn)?;
+        Ok(())
     }
 
-    pub fn get_metadata(&self, mint_address: &str) -> Result<MetadataEntity, Box<dyn std::error::Error>> {
-        let conn = self.db.get_db_connection();
-
-        Ok(conn.query_row("SELECT mint_address, name, symbol, uri, image FROM metadata WHERE mint_address= ?1", 
-                params![mint_address.to_string()],
-                |row| {
-                    Ok(MetadataEntity {
-                        mint_address: row.get(0)?,
-                        name: row.get(1)?,
-                        symbol: row.get(2)?,
-                        uri: row.get(3)?,
-                        image: row.get(4)?,                
-                    })
-                })?)
-    
+    pub fn get_metadata(&self, mint_addr: &str) -> Result<MetadataEntity, Box<dyn std::error::Error>> {
+        let mut conn = self.db.get_db_connection()?;
+        Ok(metadata_table
+                    .filter(mint_address.eq(mint_addr))
+                    .first::<MetadataEntity>(&mut conn)?)
     }
 
     pub fn get_all_saved_mint_addresses(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-        let conn = self.db.get_db_connection();
+        let mut conn = self.db.get_db_connection()?;
+        Ok(metadata_table
+            .select(mint_address)
+            .load::<String>(&mut conn)?)
 
-        let mut stmt = conn.prepare("SELECT mint_address FROM metadata")?;
-        let mut rows= stmt.query([])?;
-        let mut mint_addresses: Vec<String> = Vec::new();
-        while let Some(row) = rows.next()?  {
-            mint_addresses.push(row.get(0)?);
-        }
-
-        Ok(mint_addresses)
     }
 }
 
-
+#[derive(Debug, Queryable, Insertable, Serialize, Deserialize)]
+#[diesel(table_name = metadata)]
 pub struct MetadataEntity {
     pub mint_address: String,
-    pub name: String,
-    pub symbol: String,
-    pub uri: String,
-    pub image: Vec<u8>,
+    pub name: Option<String>,
+    pub symbol: Option<String>,
+    pub uri: Option<String>,
+    pub image: Option<Vec<u8>>,
 }
