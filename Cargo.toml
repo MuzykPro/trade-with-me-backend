@@ -7,7 +7,8 @@ edition = "2021"
 anyhow = "1.0.93"
 axum = "0.7.9"
 base64 = "0.22.1"
-diesel = { version = "2.2.5", features = ["postgres", "r2d2"] }
+chrono = { version = "0.4.38", features = ["serde"] }
+diesel = { version = "2.2.5", features = ["postgres", "r2d2", "serde_json"] }
 env_logger = "0.11.5"
 figment = { version = "0.10.19", features = ["yaml"] }
 image = "0.25.5"
@@ -21,3 +22,4 @@ solana-account-decoder = "2.1.2"
 solana-client = "2.1.2"
 solana-sdk = "2.1.2"
 tokio = { version = "1.41.1", features = ["full"] }
+uuid = { version = "1.11.0", features = ["serde"] }

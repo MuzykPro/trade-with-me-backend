@@ -1,4 +1,6 @@
 
+use std::sync::Arc;
+
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use crate::db::PostgreSqlClient;
@@ -6,11 +8,11 @@ use crate::schema::metadata;
 use crate::schema::metadata::dsl::metadata as metadata_table;
 use crate::schema::metadata::dsl::mint_address;
 pub struct MetadataRepository {
-    db: PostgreSqlClient,
+    db: Arc<PostgreSqlClient>,
 }
 
 impl MetadataRepository {
-    pub fn new(db_client: PostgreSqlClient) -> Self {
+    pub fn new(db_client: Arc<PostgreSqlClient>) -> Self {
         MetadataRepository { db: db_client }
     }
 

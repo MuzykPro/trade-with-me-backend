@@ -13,6 +13,8 @@ use metadata_repository::MetadataRepository;
 use routes::{get_router, AppState};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use token_service::TokenService;
+use trade_repository::TradeRepository;
+use trade_service::TradeService;
 
 pub mod config;
 pub mod db;
@@ -21,6 +23,8 @@ pub mod metadata_repository;
 pub mod routes;
 pub mod schema;
 pub mod token_service;
+pub mod trade_repository;
+pub mod trade_service;
 
 // example token holder address: 87UGBXfeuCaMyxNnCD3a9Wcbjc5C8c34hbKEBUfc2F86
 #[tokio::main]
@@ -29,15 +33,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config: Config = Figment::new().merge(Yaml::file("config.yaml")).extract()?;
     
-    let sqlite_db_client = PostgreSqlClient::init(&config.postgres)?;
+    let sqlite_db_client = Arc::new(PostgreSqlClient::init(&config.postgres)?);
     let rpc_url = "https://api.mainnet-beta.solana.com".to_string();
     let rpc_client = Arc::new(RpcClient::new(rpc_url));
 
-    let metadata_repository = MetadataRepository::new(sqlite_db_client);
+    let metadata_repository = MetadataRepository::new(Arc::clone(&sqlite_db_client));
     let metadata_cache = MetadataCache::init(metadata_repository, Arc::clone(&rpc_client))?;
     let token_service = TokenService::new(metadata_cache, Arc::clone(&rpc_client));
+    let trade_repository = TradeRepository::new(Arc::clone(&sqlite_db_client));
+    let trade_service = TradeService::new(trade_repository);
     let app_state = AppState {
         token_service: Arc::new(token_service),
+        trade_service: Arc::new(trade_service)
     };
     let router = get_router(Arc::new(app_state));
 
