@@ -10,7 +10,7 @@ use figment::{
 use log::info;
 use metadata_cache::MetadataCache;
 use metadata_repository::MetadataRepository;
-use routes::{get_router, AppState};
+use routes::{get_router, AppState, SharedSessions};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use token_service::TokenService;
 use trade_repository::TradeRepository;
@@ -25,6 +25,7 @@ pub mod schema;
 pub mod token_service;
 pub mod trade_repository;
 pub mod trade_service;
+pub mod trade_websocket;
 
 // example token holder address: 87UGBXfeuCaMyxNnCD3a9Wcbjc5C8c34hbKEBUfc2F86
 #[tokio::main]
@@ -46,7 +47,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         token_service: Arc::new(token_service),
         trade_service: Arc::new(trade_service)
     };
-    let router = get_router(Arc::new(app_state));
+    let trade_sessions = Arc::new(SharedSessions::new());
+    let router = get_router(Arc::new(app_state), trade_sessions);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     info!("Server started on port 3000");
