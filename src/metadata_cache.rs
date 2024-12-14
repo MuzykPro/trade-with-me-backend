@@ -133,9 +133,9 @@ impl MetadataCache {
     async fn try_fetch_image(image_url: &str) -> Option<Vec<u8>> {
         let image_response = get(image_url).await.ok();
         if let Some(response) = image_response {
-            return response.bytes().await.ok().map(|bytes| bytes.to_vec());
+            response.bytes().await.ok().map(|bytes| bytes.to_vec())
         } else {
-            return None;
+            None
         }
     }
 

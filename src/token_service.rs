@@ -72,7 +72,7 @@ impl TokenService {
                                     .clone()
                             }),
                             image: metadata.as_ref().and_then(|m| {
-                                m.image.as_ref().map(|i| TokenService::encode_image_to_data_url(&i))
+                                m.image.as_ref().map(|i| TokenService::encode_image_to_data_url(i))
                             }),
                         });
                     }

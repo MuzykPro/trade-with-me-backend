@@ -35,13 +35,14 @@ async fn root() -> &'static str {
 pub type SessionId = Uuid;
 pub type ConnectionId = Uuid;
 
+#[derive(Default)]
 pub struct SharedSessions {
     internal: RwLock<HashMap<SessionId, TradeSession>>,
 }
 impl SharedSessions {
     pub fn new() -> Self {
         SharedSessions {
-            internal: RwLock::new(HashMap::new()),
+            internal: RwLock::default(),
         }
     }
 
@@ -61,8 +62,8 @@ impl SharedSessions {
 
     pub fn remove_client(&self, session_id: &SessionId, connection_id: &ConnectionId) {
         let mut sessions = self.internal.write().unwrap();
-        if let Some(trade_session) = sessions.get_mut(&session_id) {
-            trade_session.ws_clients.remove(&connection_id);
+        if let Some(trade_session) = sessions.get_mut(session_id) {
+            trade_session.ws_clients.remove(connection_id);
         }
     }
     pub fn broadcast(&self, session_id: &SessionId, msg: &str) {
