@@ -3,6 +3,7 @@ use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use crate::schema::trades::dsl::trades as trades_table;
+use crate::schema::trades::id;
 use crate::{db::PostgreSqlClient, schema::trades};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -15,12 +16,13 @@ impl TradeRepository {
         TradeRepository { db_client }
     }
 
-    pub fn insert_trade(&self, new_trade: NewTrade) ->  Result<(), Box<dyn std::error::Error>>{
+    pub fn insert_trade(&self, new_trade: NewTrade) -> Result<Uuid, Box<dyn std::error::Error>> {
         let mut conn = self.db_client.get_db_connection()?;
-        diesel::insert_into(trades_table)
-            .values(new_trade)
-            .execute(&mut conn)?;
-        Ok(())
+        let inserted_id = diesel::insert_into(trades_table)
+            .values(&new_trade)
+            .returning(id)
+            .get_result(&mut conn)?;
+        Ok(inserted_id)
     }
 }
 

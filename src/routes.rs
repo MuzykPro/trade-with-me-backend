@@ -10,7 +10,7 @@ use axum::{
     Extension, Json, Router,
 };
 use reqwest::StatusCode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
@@ -22,8 +22,8 @@ use crate::{
 pub fn get_router(app_state: Arc<AppState>, sessions: Arc<SharedSessions>) -> Router {
     Router::new()
         .route("/", get(root))
-        .route("/tokens/:address", get(get_tokens))
-        .route("/trade", post(create_trade_session))
+        .route("/tokens", get(get_tokens))
+        .route("/trading_session", post(create_trade_session))
         .route("/ws", get(websocket_handler))
         .with_state(app_state)
         .layer(Extension(sessions))
@@ -105,6 +105,12 @@ async fn websocket_handler(
     ws.on_upgrade(move |socket| handle_socket(socket, params.session_id, sessions))
 }
 
+#[derive(Deserialize)]
+struct CreateTradeSession {
+    #[serde(rename = "initiatorAddress")] 
+    initiator_address: String,
+}
+
 async fn create_trade_session(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateTradeSession>,
@@ -113,26 +119,36 @@ async fn create_trade_session(
         .trade_service
         .create_trade_session(&payload.initiator_address)
     {
-        Ok(()) => StatusCode::CREATED.into_response(),
+        Ok(id) => (StatusCode::CREATED,
+             Json(CreateTradeSessionResponse {
+                uuid: id.to_string()
+             }))
+             .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
+#[derive(Serialize)]
+pub struct CreateTradeSessionResponse {
+    uuid: String
+}
+
+#[derive(Deserialize)]
+pub struct GetTokensQuery {
+    address: String
+}
+
 async fn get_tokens(
     State(state): State<Arc<AppState>>,
-    address: axum::extract::Path<String>,
+    query_params: axum::extract::Query<GetTokensQuery>,
 ) -> axum::response::Json<serde_json::Value> {
-    let wallet_address = address.to_string();
+    let wallet_address = &query_params.address;
     let tokens = state
         .token_service
         .fetch_tokens(&wallet_address)
         .await
         .unwrap_or_default();
     axum::response::Json(serde_json::json!({ "tokens": tokens }))
-}
-#[derive(Deserialize)]
-struct CreateTradeSession {
-    initiator_address: String,
 }
 
 #[derive(Deserialize)]

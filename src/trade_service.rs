@@ -1,5 +1,7 @@
 use std::error::Error;
 
+use uuid::Uuid;
+
 use crate::trade_repository::{NewTrade, TradeRepository, TradeStatus};
 
 pub struct TradeService {
@@ -13,7 +15,7 @@ impl TradeService {
         }
     }
 
-    pub fn create_trade_session(&self, initiator_address: &str) -> Result<(), Box<dyn Error>> {
+    pub fn create_trade_session(&self, initiator_address: &str) -> Result<Uuid, Box<dyn Error>> {
         self.trade_repository.insert_trade(NewTrade {
             initiator: initiator_address.to_string(),
             counterparty: None,
