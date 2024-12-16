@@ -12,6 +12,7 @@ use axum::{
 use reqwest::StatusCode;
 use serde::Deserialize;
 use tokio::sync::mpsc;
+use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 use crate::{
@@ -26,6 +27,7 @@ pub fn get_router(app_state: Arc<AppState>, sessions: Arc<SharedSessions>) -> Ro
         .route("/ws", get(websocket_handler))
         .with_state(app_state)
         .layer(Extension(sessions))
+        .layer(CorsLayer::permissive())
 }
 
 async fn root() -> &'static str {
@@ -83,7 +85,16 @@ pub struct TradeSession {
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct TradeState {
-    items: Vec<String>,
+    pub items: HashMap<String, Vec<TradeItem>>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize )]
+pub struct TradeItem {
+    pub mint_address: String,
+    pub amount: String,
+    pub decimals: u8,
+    pub symbol: String,
+    pub name: String,
 }
 
 async fn websocket_handler(
