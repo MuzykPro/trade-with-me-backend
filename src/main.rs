@@ -10,11 +10,12 @@ use figment::{
 use log::info;
 use metadata_cache::MetadataCache;
 use metadata_repository::MetadataRepository;
-use routes::{get_router, AppState, SharedSessions};
+use routes::{get_router, AppState};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use token_service::TokenService;
 use trade_repository::TradeRepository;
 use trade_service::TradeService;
+use trade_session::SharedSessions;
 
 pub mod config;
 pub mod db;
@@ -26,11 +27,12 @@ pub mod token_service;
 pub mod trade_repository;
 pub mod trade_service;
 pub mod trade_websocket;
+pub mod trade_session;
 
 // example token holder address: 87UGBXfeuCaMyxNnCD3a9Wcbjc5C8c34hbKEBUfc2F86
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
+    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
     let config: Config = Figment::new().merge(Yaml::file("config.yaml")).extract()?;
     
