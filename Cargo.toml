@@ -17,6 +17,8 @@ log = "0.4.22"
 mpl-token-metadata = "5.1.0"
 r2d2 = "0.8.10"
 reqwest = "0.12.9"
+rust_decimal = "1.36.0"
+rust_decimal_macros = "1.36.0"
 serde = { version = "1.0.215", features = ["derive"] }
 serde_json = "1.0.133"
 solana-account-decoder = "2.1.2"

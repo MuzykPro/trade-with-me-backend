@@ -3,6 +3,8 @@ use futures::{SinkExt, StreamExt};
 use log::info;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
+use rust_decimal::prelude::*;
+use rust_decimal_macros::dec;
 
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -89,24 +91,24 @@ pub enum WebsocketMessage {
         user_address: String,
         #[serde(rename = "tokenMint")] 
         token_mint: String,
-        amount: u64
+        amount: Decimal
     },
     WithdrawTokens {
         #[serde(rename = "userAddress")] 
         user_address: String,
         #[serde(rename = "tokenMint")] 
         token_mint: String,
-        amount: u64
+        amount: Decimal
     },
     TradeStateUpdate {
-        offers: Arc<HashMap<String, HashMap<String, u64>>>
+        offers: Arc<HashMap<String, HashMap<String, Decimal>>>
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TokenOffer {
         pub mint: String,
-        pub amount: u64
+        pub amount: Decimal
 }
 
 
@@ -164,7 +166,7 @@ mod tests {
         let offer_tokens = WebsocketMessage::OfferTokens {
             user_address: "Alice".to_string(),
             token_mint: "TokenA".to_string(),
-            amount: 100,
+            amount: dec!(100.1337),
         };
         let offer_json = serde_json::to_string(&offer_tokens)?;
         ws1.send(Message::Text(offer_json.into())).await?;
@@ -186,7 +188,7 @@ mod tests {
                             let maybe_alice = offers.get("Alice");
                             assert!(maybe_alice.is_some(), "No 'Alice' user in update");
                             let alice_map = maybe_alice.unwrap();
-                            assert_eq!(alice_map.get("TokenA"), Some(&100));
+                            assert_eq!(alice_map.get("TokenA"), Some(&dec!(100.1337)));
                         }
                     }
                 }
@@ -201,7 +203,7 @@ mod tests {
                             let maybe_alice = offers.get("Alice");
                             assert!(maybe_alice.is_some(), "No 'Alice' user in update");
                             let alice_map = maybe_alice.unwrap();
-                            assert_eq!(alice_map.get("TokenA"), Some(&100));
+                            assert_eq!(alice_map.get("TokenA"), Some(&dec!(100.1337)));
                         }
                     }
                 }
