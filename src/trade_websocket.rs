@@ -1,16 +1,14 @@
 use axum::extract::ws::{Message, WebSocket};
 use futures::{SinkExt, StreamExt};
 use log::info;
+use rust_decimal::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
-use rust_decimal::prelude::*;
-use rust_decimal_macros::dec;
 
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::trade_session::{SessionId, SharedSessions};
-
 
 pub async fn handle_socket(
     socket: WebSocket,
@@ -46,16 +44,34 @@ pub async fn handle_socket(
                         info!("Received from client {}: {}", connection_id, text);
                         if let Ok(msg) = serde_json::from_str::<WebsocketMessage>(&text) {
                             match msg {
-                                WebsocketMessage::OfferTokens{user_address, token_mint, amount} => {
+                                WebsocketMessage::OfferTokens {
+                                    user_address,
+                                    token_mint,
+                                    amount,
+                                } => {
                                     //TODO handle errors
-                                    sessions.add_tokens_offer(&session_id, user_address, token_mint, amount);
+                                    sessions.add_tokens_offer(
+                                        &session_id,
+                                        user_address,
+                                        token_mint,
+                                        amount,
+                                    );
                                     sessions.broadcast_current_state(&session_id);
-                                },
-                                WebsocketMessage::WithdrawTokens{user_address, token_mint, amount} => {
+                                }
+                                WebsocketMessage::WithdrawTokens {
+                                    user_address,
+                                    token_mint,
+                                    amount,
+                                } => {
                                     //TODO handle errors
-                                    sessions.withdraw_tokens(&session_id, user_address, token_mint, amount);
+                                    sessions.withdraw_tokens(
+                                        &session_id,
+                                        user_address,
+                                        token_mint,
+                                        amount,
+                                    );
                                     sessions.broadcast_current_state(&session_id);
-                                },
+                                }
                                 _ => {}
                             }
                         }
@@ -82,35 +98,33 @@ pub async fn handle_socket(
     );
 }
 
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum WebsocketMessage {
     OfferTokens {
-        #[serde(rename = "userAddress")] 
+        #[serde(rename = "userAddress")]
         user_address: String,
-        #[serde(rename = "tokenMint")] 
+        #[serde(rename = "tokenMint")]
         token_mint: String,
-        amount: Decimal
+        amount: Decimal,
     },
     WithdrawTokens {
-        #[serde(rename = "userAddress")] 
+        #[serde(rename = "userAddress")]
         user_address: String,
-        #[serde(rename = "tokenMint")] 
+        #[serde(rename = "tokenMint")]
         token_mint: String,
-        amount: Decimal
+        amount: Decimal,
     },
     TradeStateUpdate {
-        offers: Arc<HashMap<String, HashMap<String, Decimal>>>
-    }
+        offers: Arc<HashMap<String, HashMap<String, Decimal>>>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TokenOffer {
-        pub mint: String,
-        pub amount: Decimal
+    pub mint: String,
+    pub amount: Decimal,
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -122,6 +136,7 @@ mod tests {
     };
     use futures::{SinkExt, StreamExt};
     use log::LevelFilter;
+    use rust_decimal_macros::dec;
     use std::{future::IntoFuture, sync::Arc};
     use tokio::net::TcpListener;
     use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};

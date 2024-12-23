@@ -1,10 +1,7 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use std::sync::Arc;
 
 use axum::{
-    extract::{Path, Query, State, WebSocketUpgrade},
+    extract::{Path, State, WebSocketUpgrade},
     response::IntoResponse,
     routing::{get, post},
     Extension, Json, Router,
@@ -82,7 +79,7 @@ async fn get_tokens(
     let wallet_address = &query_params.address;
     let tokens = state
         .token_service
-        .fetch_tokens(&wallet_address)
+        .fetch_tokens(wallet_address)
         .await
         .unwrap_or_default();
     axum::response::Json(serde_json::json!({ "tokens": tokens }))

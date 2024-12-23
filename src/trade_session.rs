@@ -1,11 +1,11 @@
+use anyhow::*;
+use rust_decimal::prelude::*;
+use rust_decimal_macros::dec;
+use std::result::Result::Ok;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
-use rust_decimal::prelude::*;
-use rust_decimal_macros::dec;
-use anyhow::*;
-use std::result::Result::Ok;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -74,18 +74,15 @@ impl SharedSessions {
                 trade_session.state = TradeState {
                     items: Arc::new(new_state_items),
                 };
+            } else if trade_session.state.items.len() == 2 {
+                return Err(Error::msg(
+                    "There are already 2 users involved in this trade",
+                ));
             } else {
-                if trade_session.state.items.len() == 2 {
-                    return Err(Error::msg(
-                        "There are already 2 users involved in this trade",
-                    ));
-                } else {
-                    new_state_items
-                        .insert(user_address, HashMap::from([(token_mint, token_amount)]));
-                    trade_session.state = TradeState {
-                        items: Arc::new(new_state_items),
-                    };
-                }
+                new_state_items.insert(user_address, HashMap::from([(token_mint, token_amount)]));
+                trade_session.state = TradeState {
+                    items: Arc::new(new_state_items),
+                };
             }
         } else {
             return Err(Error::msg(format!("Session {} not found", session_id)));
@@ -212,8 +209,12 @@ mod tests {
         shared.add_client(session_id, connection_id, tx);
 
         // Add tokens for user "Alice"
-        let result =
-            shared.add_tokens_offer(&session_id, "Alice".to_string(), "TokenA".to_string(), dec!(0.1001));
+        let result = shared.add_tokens_offer(
+            &session_id,
+            "Alice".to_string(),
+            "TokenA".to_string(),
+            dec!(0.1001),
+        );
         assert!(result.is_ok());
 
         {
@@ -224,11 +225,18 @@ mod tests {
                 .items
                 .get("Alice")
                 .expect("Alice not found in state");
-            assert_eq!(*alice_tokens.get("TokenA").expect("TokenA not found"), dec!(0.1001));
+            assert_eq!(
+                *alice_tokens.get("TokenA").expect("TokenA not found"),
+                dec!(0.1001)
+            );
         }
         // Add more tokens for Alice, same mint
-        let result =
-            shared.add_tokens_offer(&session_id, "Alice".to_string(), "TokenA".to_string(), dec!(0.5001));
+        let result = shared.add_tokens_offer(
+            &session_id,
+            "Alice".to_string(),
+            "TokenA".to_string(),
+            dec!(0.5001),
+        );
         assert!(result.is_ok());
 
         {
@@ -248,13 +256,21 @@ mod tests {
         }
 
         // Add second user "Bob"
-        let result =
-            shared.add_tokens_offer(&session_id, "Bob".to_string(), "TokenB".to_string(), dec!(10));
+        let result = shared.add_tokens_offer(
+            &session_id,
+            "Bob".to_string(),
+            "TokenB".to_string(),
+            dec!(10),
+        );
         assert!(result.is_ok());
 
         // Try adding a third user should fail because we have a 2-users limit
-        let result =
-            shared.add_tokens_offer(&session_id, "Charlie".to_string(), "TokenC".to_string(), dec!(5));
+        let result = shared.add_tokens_offer(
+            &session_id,
+            "Charlie".to_string(),
+            "TokenC".to_string(),
+            dec!(5),
+        );
         assert!(result.is_err());
     }
 
@@ -278,8 +294,12 @@ mod tests {
         }
 
         // Withdraw 50 tokens from Alice's TokenA
-        let result =
-            shared.withdraw_tokens(&session_id, "Alice".to_string(), "TokenA".to_string(), dec!(50));
+        let result = shared.withdraw_tokens(
+            &session_id,
+            "Alice".to_string(),
+            "TokenA".to_string(),
+            dec!(50),
+        );
         assert!(result.is_ok());
 
         {
@@ -291,8 +311,12 @@ mod tests {
         }
 
         // Withdraw more tokens than available should not go below zero
-        let result =
-            shared.withdraw_tokens(&session_id, "Alice".to_string(), "TokenA".to_string(), dec!(100));
+        let result = shared.withdraw_tokens(
+            &session_id,
+            "Alice".to_string(),
+            "TokenA".to_string(),
+            dec!(100),
+        );
         assert!(result.is_ok());
 
         {
@@ -304,8 +328,12 @@ mod tests {
         }
 
         // Withdrawing a token that does not exist
-        let result: std::result::Result<(), Error> =
-            shared.withdraw_tokens(&session_id, "Alice".to_string(), "TokenB".to_string(), dec!(10));
+        let result: std::result::Result<(), Error> = shared.withdraw_tokens(
+            &session_id,
+            "Alice".to_string(),
+            "TokenB".to_string(),
+            dec!(10),
+        );
         // Should insert token with requested amount (but subtracting should yield 0)
         assert!(result.is_ok());
 
