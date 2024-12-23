@@ -2,20 +2,31 @@ use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
+use rust_decimal::prelude::*;
+use rust_decimal_macros::dec;
 
-use crate::metadata_cache::MetadataCache;
+use crate::{
+    metadata_cache::MetadataCache,
+    token_amount_cache::TokenAmountCache,
+};
 
 pub struct TokenService {
     metadata_cache: MetadataCache,
     rpc_client: Arc<RpcClient>,
+    token_amount_cache: Arc<TokenAmountCache>,
 }
 
 impl TokenService {
-    pub fn new(metadata_cache: MetadataCache, rpc_client: Arc<RpcClient>) -> Self {
+    pub fn new(
+        metadata_cache: MetadataCache,
+        rpc_client: Arc<RpcClient>,
+        token_amount_cache: Arc<TokenAmountCache>,
+    ) -> Self {
         TokenService {
             metadata_cache,
             rpc_client,
+            token_amount_cache,
         }
     }
 
@@ -57,22 +68,27 @@ impl TokenService {
                             balance,
                             is_nft,
                             symbol: metadata.as_ref().and_then(|m| {
-                                m.symbol.as_ref()
+                                m.symbol
+                                    .as_ref()
                                     .map(|s| s.trim_end_matches(char::from(0)).to_string())
                                     .clone()
                             }),
                             name: metadata.as_ref().and_then(|m| {
-                                m.name.as_ref()
+                                m.name
+                                    .as_ref()
                                     .map(|n| n.trim_end_matches(char::from(0)).to_string())
                                     .clone()
                             }),
                             uri: metadata.as_ref().and_then(|m| {
-                                m.uri.as_ref()
+                                m.uri
+                                    .as_ref()
                                     .map(|u| u.trim_end_matches(char::from(0)).to_string())
                                     .clone()
                             }),
                             image: metadata.as_ref().and_then(|m| {
-                                m.image.as_ref().map(|i| TokenService::encode_image_to_data_url(i))
+                                m.image
+                                    .as_ref()
+                                    .map(|i| TokenService::encode_image_to_data_url(i))
                             }),
                         });
                     }
@@ -80,6 +96,8 @@ impl TokenService {
             }
         }
 
+        let token_amounts: HashMap<String, Decimal> = balances.iter().map(|b| (b.mint.clone(), Decimal::from_f64(b.balance).unwrap_or_default())).collect();
+        self.token_amount_cache.insert_token_amounts(wallet_address.to_owned(), token_amounts);
         Ok(balances)
     }
 

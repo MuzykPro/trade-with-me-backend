@@ -128,6 +128,8 @@ pub struct TokenOffer {
 
 #[cfg(test)]
 mod tests {
+    use crate::token_amount_cache::TokenAmountCache;
+
     use super::*; // If your code is in the same module/crate. Otherwise, import appropriately.
     use axum::{
         extract::{Path, WebSocketUpgrade},
@@ -149,7 +151,8 @@ mod tests {
             .is_test(true) // Ensures output works correctly during tests
             .init();
         // 1. Create shared state
-        let shared_sessions = Arc::new(SharedSessions::new());
+        let token_amount_cache = Arc::new(TokenAmountCache::init());
+        let shared_sessions = Arc::new(SharedSessions::new(token_amount_cache));
 
         // 2. Set up an Axum router with a WebSocket route
         let app = Router::new().route(

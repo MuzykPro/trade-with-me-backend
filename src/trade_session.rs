@@ -1,6 +1,7 @@
 use anyhow::*;
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
+use std::cmp;
 use std::result::Result::Ok;
 use std::{
     collections::HashMap,
@@ -9,18 +10,20 @@ use std::{
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+use crate::token_amount_cache::TokenAmountCache;
 use crate::trade_websocket::WebsocketMessage;
 pub type SessionId = Uuid;
 pub type ConnectionId = Uuid;
 
-#[derive(Default)]
 pub struct SharedSessions {
     internal: Mutex<HashMap<SessionId, TradeSession>>,
+    token_amount_cache: Arc<TokenAmountCache>,
 }
 impl SharedSessions {
-    pub fn new() -> Self {
+    pub fn new(token_amount_cache: Arc<TokenAmountCache>) -> Self {
         SharedSessions {
             internal: Mutex::default(),
+            token_amount_cache 
         }
     }
 
@@ -65,11 +68,16 @@ impl SharedSessions {
     ) -> Result<()> {
         let mut sessions = self.internal.lock().unwrap();
         if let Some(trade_session) = sessions.get_mut(session_id) {
+            let token_amounts = self.token_amount_cache.get_token_amounts(&user_address);
+            let available_tokens = token_amounts.map_or_else(|| dec!(0), 
+            |amounts| amounts.get(&token_mint).map_or_else(||dec!(0),
+            |amount|amount.to_owned()));
+
             let mut new_state_items = (*trade_session.state.items).clone();
             if let Some(trade_items) = new_state_items.get_mut(&user_address) {
                 trade_items
                     .entry(token_mint)
-                    .and_modify(|amount| *amount += token_amount)
+                    .and_modify(|amount| *amount = cmp::min(*amount + token_amount, available_tokens))
                     .or_insert(token_amount);
                 trade_session.state = TradeState {
                     items: Arc::new(new_state_items),
@@ -135,13 +143,16 @@ pub struct TradeState {
 
 #[cfg(test)]
 mod tests {
+    use crate::token_amount_cache;
+
     use super::*;
     use tokio::sync::mpsc;
     use uuid::Uuid;
 
     #[tokio::test]
     async fn test_add_client() {
-        let shared = SharedSessions::new();
+        let token_amount_cache = Arc::new(TokenAmountCache::init());
+        let shared = SharedSessions::new(token_amount_cache);
         let session_id = Uuid::new_v4();
         let connection_id = Uuid::new_v4();
 
@@ -155,7 +166,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_client() {
-        let shared = SharedSessions::new();
+        let token_amount_cache = Arc::new(TokenAmountCache::init());
+        let shared = SharedSessions::new(token_amount_cache);
         let session_id = Uuid::new_v4();
         let connection_id = Uuid::new_v4();
 
@@ -172,7 +184,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_broadcast_current_state() {
-        let shared = SharedSessions::new();
+        let token_amount_cache = Arc::new(TokenAmountCache::init());
+        let shared = SharedSessions::new(token_amount_cache);
         let session_id = Uuid::new_v4();
         let connection_id_1 = Uuid::new_v4();
         let connection_id_2 = Uuid::new_v4();
@@ -201,7 +214,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_tokens_offer() {
-        let shared = SharedSessions::new();
+        let token_amount_cache = Arc::new(TokenAmountCache::init());
+        token_amount_cache.insert_token_amounts("Alice".to_string(), HashMap::from([("TokenA".to_string(), dec!(0.6))]));
+        let shared = SharedSessions::new(token_amount_cache);
         let session_id = Uuid::new_v4();
         let connection_id = Uuid::new_v4();
 
@@ -251,7 +266,7 @@ mod tests {
                 *updated_alice_tokens
                     .get("TokenA")
                     .expect("TokenA not found"),
-                dec!(0.6002)
+                dec!(0.6)
             );
         }
 
@@ -276,7 +291,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_withdraw_tokens() {
-        let shared = SharedSessions::new();
+        let token_amount_cache = Arc::new(TokenAmountCache::init());
+        let shared = SharedSessions::new(token_amount_cache);
         let session_id = Uuid::new_v4();
 
         // Create a session with some tokens
