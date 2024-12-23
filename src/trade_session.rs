@@ -23,7 +23,7 @@ impl SharedSessions {
     pub fn new(token_amount_cache: Arc<TokenAmountCache>) -> Self {
         SharedSessions {
             internal: Mutex::default(),
-            token_amount_cache 
+            token_amount_cache,
         }
     }
 
@@ -66,19 +66,29 @@ impl SharedSessions {
         token_mint: String,
         token_amount: Decimal,
     ) -> Result<()> {
+        if token_amount <= dec!(0) {
+            return Ok(());
+        }
         let mut sessions = self.internal.lock().unwrap();
         if let Some(trade_session) = sessions.get_mut(session_id) {
             let token_amounts = self.token_amount_cache.get_token_amounts(&user_address);
-            let available_tokens = token_amounts.map_or_else(|| dec!(0), 
-            |amounts| amounts.get(&token_mint).map_or_else(||dec!(0),
-            |amount|amount.to_owned()));
+            let available_tokens = token_amounts.map_or_else(
+                || dec!(0),
+                |amounts| {
+                    amounts
+                        .get(&token_mint)
+                        .map_or_else(|| dec!(0), |amount| amount.to_owned())
+                },
+            );
 
             let mut new_state_items = (*trade_session.state.items).clone();
             if let Some(trade_items) = new_state_items.get_mut(&user_address) {
                 trade_items
                     .entry(token_mint)
-                    .and_modify(|amount| *amount = cmp::min(*amount + token_amount, available_tokens))
-                    .or_insert(token_amount);
+                    .and_modify(|amount| {
+                        *amount = cmp::min(*amount + token_amount, available_tokens)
+                    })
+                    .or_insert(cmp::min(token_amount, available_tokens));
                 trade_session.state = TradeState {
                     items: Arc::new(new_state_items),
                 };
@@ -87,7 +97,10 @@ impl SharedSessions {
                     "There are already 2 users involved in this trade",
                 ));
             } else {
-                new_state_items.insert(user_address, HashMap::from([(token_mint, token_amount)]));
+                new_state_items.insert(
+                    user_address,
+                    HashMap::from([(token_mint, cmp::min(token_amount, available_tokens))]),
+                );
                 trade_session.state = TradeState {
                     items: Arc::new(new_state_items),
                 };
@@ -105,17 +118,26 @@ impl SharedSessions {
         token_mint: String,
         token_amount: Decimal,
     ) -> Result<()> {
+        if token_amount <= dec!(0) {
+            return Ok(());
+        }
         let mut sessions = self.internal.lock().unwrap();
         if let Some(trade_session) = sessions.get_mut(session_id) {
             let mut new_state_items = (*trade_session.state.items).clone();
             if let Some(trade_items) = new_state_items.get_mut(&user_address) {
-                trade_items.entry(token_mint).and_modify(|amount| {
+                trade_items.entry(token_mint.clone()).and_modify(|amount| {
                     *amount = if token_amount >= *amount {
                         dec!(0)
                     } else {
                         *amount - token_amount
                     }
                 });
+                if let Some(a) = trade_items.get(&token_mint)  {
+                    if *a == dec!(0) {
+                        trade_items.remove(&token_mint);
+                    }
+                }
+                
                 trade_session.state = TradeState {
                     items: Arc::new(new_state_items),
                 };
@@ -215,7 +237,10 @@ mod tests {
     #[tokio::test]
     async fn test_add_tokens_offer() {
         let token_amount_cache = Arc::new(TokenAmountCache::init());
-        token_amount_cache.insert_token_amounts("Alice".to_string(), HashMap::from([("TokenA".to_string(), dec!(0.6))]));
+        token_amount_cache.insert_token_amounts(
+            "Alice".to_string(),
+            HashMap::from([("TokenA".to_string(), dec!(0.6))]),
+        );
         let shared = SharedSessions::new(token_amount_cache);
         let session_id = Uuid::new_v4();
         let connection_id = Uuid::new_v4();
@@ -339,8 +364,7 @@ mod tests {
             let sessions = shared.internal.lock().unwrap();
             let session = sessions.get(&session_id).expect("Session not found");
             let alice_tokens = session.state.items.get("Alice").expect("Alice not found");
-            let token_a_amount = alice_tokens.get("TokenA").expect("TokenA not found");
-            assert_eq!(*token_a_amount, dec!(0));
+            assert_eq!(*alice_tokens, HashMap::new());
         }
 
         // Withdrawing a token that does not exist
@@ -362,4 +386,287 @@ mod tests {
             assert_eq!(token_b_maybe.is_none(), true);
         }
     }
+
+    #[tokio::test]
+    async fn add_more_tokens_than_available() {
+        let user_address = "Alice";
+        let token_mint = "TokenA";
+        let available_tokens = dec!(10);
+        let token_amount_cache = Arc::new(TokenAmountCache::init());
+        token_amount_cache.insert_token_amounts(
+            user_address.to_owned(),
+            HashMap::from([(token_mint.to_string(), available_tokens)]),
+        );
+        let shared = SharedSessions::new(token_amount_cache);
+        let session_id = Uuid::new_v4();
+        let connection_id = Uuid::new_v4();
+
+        let (tx, _rx) = mpsc::channel(10);
+        shared.add_client(session_id, connection_id, tx);
+
+        let result = shared.add_tokens_offer(
+            &session_id,
+            user_address.to_string(),
+            token_mint.to_string(),
+            dec!(12),
+        );
+        assert!(result.is_ok());
+
+        {
+            let sessions = shared.internal.lock().unwrap();
+            let session = sessions.get(&session_id).expect("Session not found");
+            let alice_tokens = session
+                .state
+                .items
+                .get(user_address)
+                .expect("Alice not found in state");
+            assert_eq!(
+                *alice_tokens.get(token_mint).expect("TokenA not found"),
+                available_tokens
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn add_more_tokens_than_available_multiple_times() {
+        let user_address = "Alice";
+        let token_mint = "TokenA";
+        let available_tokens = dec!(10);
+        let token_amount_cache = Arc::new(TokenAmountCache::init());
+        token_amount_cache.insert_token_amounts(
+            user_address.to_owned(),
+            HashMap::from([(token_mint.to_string(), available_tokens)]),
+        );
+        let shared = SharedSessions::new(token_amount_cache);
+        let session_id = Uuid::new_v4();
+        let connection_id = Uuid::new_v4();
+
+        let (tx, _rx) = mpsc::channel(10);
+        shared.add_client(session_id, connection_id, tx);
+
+        let result = shared.add_tokens_offer(
+            &session_id,
+            user_address.to_string(),
+            token_mint.to_string(),
+            dec!(4),
+        );
+        assert!(result.is_ok());
+        let result = shared.add_tokens_offer(
+            &session_id,
+            user_address.to_string(),
+            token_mint.to_string(),
+            dec!(4),
+        );
+        assert!(result.is_ok());
+        let result = shared.add_tokens_offer(
+            &session_id,
+            user_address.to_string(),
+            token_mint.to_string(),
+            dec!(4),
+        );
+        assert!(result.is_ok());
+
+        {
+            let sessions = shared.internal.lock().unwrap();
+            let session = sessions.get(&session_id).expect("Session not found");
+            let alice_tokens = session
+                .state
+                .items
+                .get(user_address)
+                .expect("Alice not found in state");
+            assert_eq!(
+                *alice_tokens.get(token_mint).expect("TokenA not found"),
+                available_tokens
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn add_negative_amount_of_tokens() {
+        let user_address = "Alice";
+        let token_mint = "TokenA";
+        let available_tokens = dec!(10);
+        let token_amount_cache = Arc::new(TokenAmountCache::init());
+        token_amount_cache.insert_token_amounts(
+            user_address.to_owned(),
+            HashMap::from([(token_mint.to_string(), available_tokens)]),
+        );
+        let shared = SharedSessions::new(token_amount_cache);
+        let session_id = Uuid::new_v4();
+        let connection_id = Uuid::new_v4();
+
+        let (tx, _rx) = mpsc::channel(10);
+        shared.add_client(session_id, connection_id, tx);
+
+        let result = shared.add_tokens_offer(
+            &session_id,
+            user_address.to_string(),
+            token_mint.to_string(),
+            dec!(4),
+        );
+        assert!(result.is_ok());
+        let result = shared.add_tokens_offer(
+            &session_id,
+            user_address.to_string(),
+            token_mint.to_string(),
+            dec!(4),
+        );
+        assert!(result.is_ok());
+        let result = shared.add_tokens_offer(
+            &session_id,
+            user_address.to_string(),
+            token_mint.to_string(),
+            dec!(-4),
+        );
+        assert!(result.is_ok());
+
+        {
+            let sessions = shared.internal.lock().unwrap();
+            let session = sessions.get(&session_id).expect("Session not found");
+            let alice_tokens = session
+                .state
+                .items
+                .get(user_address)
+                .expect("Alice not found in state");
+            assert_eq!(
+                *alice_tokens.get(token_mint).expect("TokenA not found"),
+                dec!(8)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn add_then_withdraw_negative_amount() {
+        let user_address = "Alice";
+        let token_mint = "TokenA";
+        let available_tokens = dec!(10);
+        let token_amount_cache = Arc::new(TokenAmountCache::init());
+        token_amount_cache.insert_token_amounts(
+            user_address.to_owned(),
+            HashMap::from([(token_mint.to_string(), available_tokens)]),
+        );
+        let shared = SharedSessions::new(token_amount_cache);
+        let session_id = Uuid::new_v4();
+        let connection_id = Uuid::new_v4();
+
+        let (tx, _rx) = mpsc::channel(10);
+        shared.add_client(session_id, connection_id, tx);
+
+        let result = shared.add_tokens_offer(
+            &session_id,
+            user_address.to_string(),
+            token_mint.to_string(),
+            dec!(4),
+        );
+        assert!(result.is_ok());
+        let result = shared.withdraw_tokens(
+            &session_id,
+            user_address.to_string(),
+            token_mint.to_string(),
+            dec!(-4),
+        );
+
+        assert!(result.is_ok());
+
+        {
+            let sessions = shared.internal.lock().unwrap();
+            let session = sessions.get(&session_id).expect("Session not found");
+            let alice_tokens = session
+                .state
+                .items
+                .get(user_address)
+                .expect("Alice not found in state");
+            assert_eq!(
+                *alice_tokens.get(token_mint).expect("TokenA not found"),
+                dec!(4)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn withdraw_not_offered_tokens() {
+        let user_address = "Alice";
+        let token_mint = "TokenA";
+        let available_tokens = dec!(10);
+        let token_amount_cache = Arc::new(TokenAmountCache::init());
+        token_amount_cache.insert_token_amounts(
+            user_address.to_owned(),
+            HashMap::from([(token_mint.to_string(), available_tokens)]),
+        );
+        let shared = SharedSessions::new(token_amount_cache);
+        let session_id = Uuid::new_v4();
+        let connection_id = Uuid::new_v4();
+
+        let (tx, _rx) = mpsc::channel(10);
+        shared.add_client(session_id, connection_id, tx);
+
+        let result = shared.withdraw_tokens(
+            &session_id,
+            user_address.to_string(),
+            token_mint.to_string(),
+            dec!(4),
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn withdraw_below_zero() {
+        let user_address = "Alice";
+        let token_mint = "TokenA";
+        let available_tokens = dec!(10);
+        let token_amount_cache = Arc::new(TokenAmountCache::init());
+        token_amount_cache.insert_token_amounts(
+            user_address.to_owned(),
+            HashMap::from([(token_mint.to_string(), available_tokens)]),
+        );
+        let shared = SharedSessions::new(token_amount_cache);
+        let session_id = Uuid::new_v4();
+        let connection_id = Uuid::new_v4();
+
+        let (tx, _rx) = mpsc::channel(10);
+        shared.add_client(session_id, connection_id, tx);
+
+        let result = shared.add_tokens_offer(
+            &session_id,
+            user_address.to_string(),
+            token_mint.to_string(),
+            dec!(4),
+        );
+        assert!(result.is_ok());
+
+        let result = shared.withdraw_tokens(
+            &session_id,
+            user_address.to_string(),
+            token_mint.to_string(),
+            dec!(3),
+        );
+        assert!(result.is_ok());
+
+        let result = shared.withdraw_tokens(
+            &session_id,
+            user_address.to_string(),
+            token_mint.to_string(),
+            dec!(3),
+        );
+        assert!(result.is_ok());
+        let result = shared.withdraw_tokens(
+            &session_id,
+            user_address.to_string(),
+            token_mint.to_string(),
+            dec!(3),
+        );
+        assert!(result.is_ok());
+
+        //should delete tokens state if amount drops to zero
+        {
+            let sessions = shared.internal.lock().unwrap();
+            let session = sessions.get(&session_id).expect("Session not found");
+            let alice_tokens = session.state.items.get(user_address).expect("Alice not found in state");
+            assert_eq!(*alice_tokens, HashMap::new());
+        }
+    }
+    //withdraw negative amount of tokens
+    //withdraw negative amount of tokens, exceeding available
+    //add tokens, then withdraw negative amount of tokens that exceeds available tokens
 }
