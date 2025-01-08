@@ -7,8 +7,7 @@ use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 
 use crate::{
-    metadata_cache::MetadataCache,
-    token_amount_cache::TokenAmountCache,
+    metadata_cache::MetadataCache, metadata_repository::MetadataEntity, token_amount_cache::TokenAmountCache
 };
 
 pub struct TokenService {
@@ -27,6 +26,41 @@ impl TokenService {
             metadata_cache,
             rpc_client,
             token_amount_cache,
+        }
+    }
+
+    pub async fn get_token_metadata(&self, mint_address: &str) -> Option<MetadataView>  {
+        let metadata = self.metadata_cache.get_token_metadata(mint_address).await.ok();
+        if metadata.is_some() {
+            let metadata_view = MetadataView {                
+                mint: metadata.as_ref().unwrap().mint_address.clone(),            
+                symbol: metadata.as_ref().and_then(|m| {
+                    m.symbol
+                        .as_ref()
+                        .map(|s| s.trim_end_matches(char::from(0)).to_string())
+                        .clone()
+                }),
+                name: metadata.as_ref().and_then(|m| {
+                    m.name
+                        .as_ref()
+                        .map(|n| n.trim_end_matches(char::from(0)).to_string())
+                        .clone()
+                }),
+                uri: metadata.as_ref().and_then(|m| {
+                    m.uri
+                        .as_ref()
+                        .map(|u| u.trim_end_matches(char::from(0)).to_string())
+                        .clone()
+                }),
+                image: metadata.as_ref().and_then(|m| {
+                    m.image
+                        .as_ref()
+                        .map(|i| TokenService::encode_image_to_data_url(i))
+                }),
+            };
+            Some(metadata_view)
+        } else {
+            None
         }
     }
 
@@ -65,7 +99,7 @@ impl TokenService {
                         balances.push(TokenAccount {
                             token_account: keyed_account.pubkey.to_string(),
                             mint,
-                            balance,
+                            amount: balance,
                             is_nft,
                             symbol: metadata.as_ref().and_then(|m| {
                                 m.symbol
@@ -96,7 +130,7 @@ impl TokenService {
             }
         }
 
-        let token_amounts: HashMap<String, Decimal> = balances.iter().map(|b| (b.mint.clone(), Decimal::from_f64(b.balance).unwrap_or_default())).collect();
+        let token_amounts: HashMap<String, Decimal> = balances.iter().map(|b| (b.mint.clone(), Decimal::from_f64(b.amount).unwrap_or_default())).collect();
         self.token_amount_cache.insert_token_amounts(wallet_address.to_owned(), token_amounts);
         Ok(balances)
     }
@@ -125,8 +159,17 @@ impl TokenService {
 pub struct TokenAccount {
     pub token_account: String,
     pub mint: String,
-    pub balance: f64,
+    pub amount: f64,
     pub is_nft: bool,
+    pub name: Option<String>,
+    pub symbol: Option<String>,
+    pub uri: Option<String>,
+    pub image: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MetadataView {
+    pub mint: String,
     pub name: Option<String>,
     pub symbol: Option<String>,
     pub uri: Option<String>,

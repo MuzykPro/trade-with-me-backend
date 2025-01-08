@@ -19,6 +19,7 @@ pub fn get_router(app_state: Arc<AppState>, sessions: Arc<SharedSessions>) -> Ro
     Router::new()
         .route("/", get(root))
         .route("/tokens", get(get_tokens))
+        .route("/tokens/metadata", get(get_token_metadata))
         .route("/trading_session", post(create_trade_session))
         .route("/ws/trading_session/:session_id", get(websocket_handler))
         .with_state(app_state)
@@ -30,6 +31,20 @@ async fn root() -> &'static str {
     "Hello, World!"
 }
 
+async fn get_token_metadata(
+    State(state): State<Arc<AppState>>,
+    query_params: axum::extract::Query<GetTokenMetadataQuery>,
+) -> axum::http::Response<axum::body::Body> {
+    if let Some(metadata) = state.token_service.get_token_metadata(&query_params.mint_address).await {
+        (
+            StatusCode::CREATED,
+            Json(metadata),
+        )
+            .into_response()
+    } else {
+        (StatusCode::NOT_FOUND, format!("Metadata for token {} not found", &query_params.mint_address)).into_response()
+    }
+}
 
 async fn websocket_handler(
     ws: WebSocketUpgrade,
@@ -41,7 +56,7 @@ async fn websocket_handler(
 
 #[derive(Deserialize)]
 struct CreateTradeSession {
-    #[serde(rename = "initiatorAddress")] 
+    #[serde(rename = "initiatorAddress")]
     initiator_address: String,
 }
 
@@ -53,23 +68,30 @@ async fn create_trade_session(
         .trade_service
         .create_trade_session(&payload.initiator_address)
     {
-        Ok(id) => (StatusCode::CREATED,
-             Json(CreateTradeSessionResponse {
-                uuid: id.to_string()
-             }))
-             .into_response(),
+        Ok(id) => (
+            StatusCode::CREATED,
+            Json(CreateTradeSessionResponse {
+                uuid: id.to_string(),
+            }),
+        )
+            .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
 #[derive(Serialize)]
 pub struct CreateTradeSessionResponse {
-    uuid: String
+    uuid: String,
 }
 
 #[derive(Deserialize)]
 pub struct GetTokensQuery {
-    address: String
+    address: String,
+}
+
+#[derive(Deserialize)]
+pub struct GetTokenMetadataQuery {
+    mint_address: String,
 }
 
 async fn get_tokens(

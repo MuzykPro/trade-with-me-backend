@@ -20,6 +20,7 @@ pub async fn handle_socket(
     let (tx, mut rx) = mpsc::channel(32);
 
     sessions.add_client(session_id, connection_id, tx);
+    sessions.broadcast_current_state(&session_id);
 
     let (mut ws_sink, mut ws_stream) = socket.split();
 
