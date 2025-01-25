@@ -3,6 +3,7 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub postgres: PostgresConfig,
+    pub rpc_url: String
 }
 
 #[derive(Debug, Deserialize)]

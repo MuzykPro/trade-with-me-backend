@@ -4,3 +4,6 @@ postgres:
   user: "trade_user"
   password: "password_trade_123"
   database: "trade_with_me"
+
+# rpc_url: "https://api.mainnet-beta.solana.com"
+rpc_url: "http://127.0.0.1:8899"

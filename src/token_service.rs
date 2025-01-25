@@ -1,13 +1,14 @@
 use base64::{engine::general_purpose, Engine as _};
+use rust_decimal::prelude::*;
+use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
 use std::{collections::HashMap, sync::Arc};
-use rust_decimal::prelude::*;
-use rust_decimal_macros::dec;
 
 use crate::{
-    metadata_cache::MetadataCache, metadata_repository::MetadataEntity, token_amount_cache::TokenAmountCache
+    metadata_cache::MetadataCache, metadata_repository::MetadataEntity,
+    token_amount_cache::TokenAmountCache,
 };
 
 pub struct TokenService {
@@ -29,11 +30,15 @@ impl TokenService {
         }
     }
 
-    pub async fn get_token_metadata(&self, mint_address: &str) -> Option<MetadataView>  {
-        let metadata = self.metadata_cache.get_token_metadata(mint_address).await.ok();
+    pub async fn get_token_metadata(&self, mint_address: &str) -> Option<MetadataView> {
+        let metadata = self
+            .metadata_cache
+            .get_token_metadata(mint_address)
+            .await
+            .ok();
         if metadata.is_some() {
-            let metadata_view = MetadataView {                
-                mint: metadata.as_ref().unwrap().mint_address.clone(),            
+            let metadata_view = MetadataView {
+                mint: metadata.as_ref().unwrap().mint_address.clone(),
                 symbol: metadata.as_ref().and_then(|m| {
                     m.symbol
                         .as_ref()
@@ -70,7 +75,7 @@ impl TokenService {
     ) -> Result<Vec<TokenAccount>, Box<dyn std::error::Error>> {
         let wallet_pubkey = Pubkey::try_from(wallet_address)?;
 
-        let token_accounts = self
+        let mut token_accounts = self
             .rpc_client
             .get_token_accounts_by_owner(
                 &wallet_pubkey,
@@ -79,6 +84,17 @@ impl TokenService {
                 )?),
             )
             .await?;
+
+        let token_2022_accounts = self
+            .rpc_client
+            .get_token_accounts_by_owner(
+                &wallet_pubkey,
+                solana_client::rpc_request::TokenAccountsFilter::ProgramId(Pubkey::try_from(
+                    "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+                )?),
+            )
+            .await?;
+        token_accounts.extend(token_2022_accounts);
 
         let mut balances: Vec<TokenAccount> = Vec::new();
 
@@ -130,8 +146,17 @@ impl TokenService {
             }
         }
 
-        let token_amounts: HashMap<String, Decimal> = balances.iter().map(|b| (b.mint.clone(), Decimal::from_f64(b.amount).unwrap_or_default())).collect();
-        self.token_amount_cache.insert_token_amounts(wallet_address.to_owned(), token_amounts);
+        let token_amounts: HashMap<String, Decimal> = balances
+            .iter()
+            .map(|b| {
+                (
+                    b.mint.clone(),
+                    Decimal::from_f64(b.amount).unwrap_or_default(),
+                )
+            })
+            .collect();
+        self.token_amount_cache
+            .insert_token_amounts(wallet_address.to_owned(), token_amounts);
         Ok(balances)
     }
 

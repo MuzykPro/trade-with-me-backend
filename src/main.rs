@@ -39,8 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config: Config = Figment::new().merge(Yaml::file("config.yaml")).extract()?;
     
     let sqlite_db_client = Arc::new(PostgreSqlClient::init(&config.postgres)?);
-    let rpc_url = "https://api.mainnet-beta.solana.com".to_string();
-    let rpc_client = Arc::new(RpcClient::new(rpc_url));
+    let rpc_client = Arc::new(RpcClient::new(config.rpc_url));
 
     let metadata_repository = MetadataRepository::new(Arc::clone(&sqlite_db_client));
     let metadata_cache = MetadataCache::init(metadata_repository, Arc::clone(&rpc_client))?;
