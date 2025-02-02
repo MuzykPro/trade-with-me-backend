@@ -12,7 +12,8 @@ use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 use crate::{
-    token_service::TokenService, trade_service::TradeService, trade_session::SharedSessions, trade_websocket::handle_socket
+    token_service::TokenService, trade_service::TradeService, trade_session::SharedSessions,
+    trade_websocket::handle_socket,
 };
 
 pub fn get_router(app_state: Arc<AppState>, sessions: Arc<SharedSessions>) -> Router {
@@ -35,20 +36,27 @@ async fn get_token_metadata(
     State(state): State<Arc<AppState>>,
     query_params: axum::extract::Query<GetTokenMetadataQuery>,
 ) -> axum::http::Response<axum::body::Body> {
-    if let Some(metadata) = state.token_service.get_token_metadata(&query_params.mint_address).await {
+    if let Some(metadata) = state
+        .token_service
+        .get_token_metadata(&query_params.mint_address)
+        .await
+    {
+        (StatusCode::CREATED, Json(metadata)).into_response()
+    } else {
         (
-            StatusCode::CREATED,
-            Json(metadata),
+            StatusCode::NOT_FOUND,
+            format!(
+                "Metadata for token {} not found",
+                &query_params.mint_address
+            ),
         )
             .into_response()
-    } else {
-        (StatusCode::NOT_FOUND, format!("Metadata for token {} not found", &query_params.mint_address)).into_response()
     }
 }
 
 async fn websocket_handler(
     ws: WebSocketUpgrade,
-    Path(params): Path<OpenTradingSessionWebsocket>,
+    Path(params): Path<SessionPathParam>,
     Extension(sessions): Extension<Arc<SharedSessions>>,
 ) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, params.session_id, sessions))
@@ -108,7 +116,7 @@ async fn get_tokens(
 }
 
 #[derive(Deserialize)]
-struct OpenTradingSessionWebsocket {
+struct SessionPathParam {
     session_id: Uuid,
 }
 

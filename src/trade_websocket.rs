@@ -51,9 +51,9 @@ pub async fn handle_socket(
                                     amount,
                                 } => {
                                     //TODO handle errors
-                                    sessions.add_tokens_offer(
+                                    let _ = sessions.add_tokens_offer(
                                         &session_id,
-                                        user_address,
+                                        &user_address,
                                         token_mint,
                                         amount,
                                     );
@@ -65,9 +65,9 @@ pub async fn handle_socket(
                                     amount,
                                 } => {
                                     //TODO handle errors
-                                    sessions.withdraw_tokens(
+                                    let _ = sessions.withdraw_tokens(
                                         &session_id,
-                                        user_address,
+                                        &user_address,
                                         token_mint,
                                         amount,
                                     );

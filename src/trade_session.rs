@@ -62,7 +62,7 @@ impl SharedSessions {
     pub fn add_tokens_offer(
         &self,
         session_id: &SessionId,
-        user_address: String,
+        user_address: &str,
         token_mint: String,
         token_amount: Decimal,
     ) -> Result<()> {
@@ -71,7 +71,7 @@ impl SharedSessions {
         }
         let mut sessions = self.internal.lock().unwrap();
         if let Some(trade_session) = sessions.get_mut(session_id) {
-            let token_amounts = self.token_amount_cache.get_token_amounts(&user_address);
+            let token_amounts = self.token_amount_cache.get_token_amounts(user_address);
             let available_tokens = token_amounts.map_or_else(
                 || dec!(0),
                 |amounts| {
@@ -82,7 +82,7 @@ impl SharedSessions {
             );
 
             let mut new_state_items = (*trade_session.state.items).clone();
-            if let Some(trade_items) = new_state_items.get_mut(&user_address) {
+            if let Some(trade_items) = new_state_items.get_mut(user_address) {
                 trade_items
                     .entry(token_mint)
                     .and_modify(|amount| {
@@ -91,6 +91,7 @@ impl SharedSessions {
                     .or_insert(cmp::min(token_amount, available_tokens));
                 trade_session.state = TradeState {
                     items: Arc::new(new_state_items),
+                    user_accepted: None,
                 };
             } else if trade_session.state.items.len() == 2 {
                 return Err(Error::msg(
@@ -98,11 +99,12 @@ impl SharedSessions {
                 ));
             } else {
                 new_state_items.insert(
-                    user_address,
+                    String::from(user_address),
                     HashMap::from([(token_mint, cmp::min(token_amount, available_tokens))]),
                 );
                 trade_session.state = TradeState {
                     items: Arc::new(new_state_items),
+                    user_accepted: None,
                 };
             }
         } else {
@@ -114,7 +116,7 @@ impl SharedSessions {
     pub fn withdraw_tokens(
         &self,
         session_id: &SessionId,
-        user_address: String,
+        user_address: &str,
         token_mint: String,
         token_amount: Decimal,
     ) -> Result<()> {
@@ -124,7 +126,7 @@ impl SharedSessions {
         let mut sessions = self.internal.lock().unwrap();
         if let Some(trade_session) = sessions.get_mut(session_id) {
             let mut new_state_items = (*trade_session.state.items).clone();
-            if let Some(trade_items) = new_state_items.get_mut(&user_address) {
+            if let Some(trade_items) = new_state_items.get_mut(user_address) {
                 trade_items.entry(token_mint.clone()).and_modify(|amount| {
                     *amount = if token_amount >= *amount {
                         dec!(0)
@@ -132,14 +134,15 @@ impl SharedSessions {
                         *amount - token_amount
                     }
                 });
-                if let Some(a) = trade_items.get(&token_mint)  {
+                if let Some(a) = trade_items.get(&token_mint) {
                     if *a == dec!(0) {
                         trade_items.remove(&token_mint);
                     }
                 }
-                
+
                 trade_session.state = TradeState {
                     items: Arc::new(new_state_items),
+                    user_accepted: None,
                 };
             } else {
                 return Err(Error::msg(format!(
@@ -147,6 +150,16 @@ impl SharedSessions {
                     token_mint
                 )));
             }
+        }
+        Ok(())
+    }
+
+    pub fn accept_trade(&self, session_id: &SessionId, user_address: &str) -> Result<()> {
+        let mut sessions = self.internal.lock().unwrap();
+        if let Some(trade_session) = sessions.get_mut(session_id) {
+            trade_session.state.user_accepted = Some(String::from(user_address));
+        } else {
+            return Err(Error::msg(format!("Session {} not found", session_id)));
         }
         Ok(())
     }
@@ -161,6 +174,7 @@ pub struct TradeSession {
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct TradeState {
     pub items: Arc<HashMap<String, HashMap<String, Decimal>>>,
+    pub user_accepted: Option<String>,
 }
 
 #[cfg(test)]
@@ -170,6 +184,188 @@ mod tests {
     use super::*;
     use tokio::sync::mpsc;
     use uuid::Uuid;
+
+    #[tokio::test]
+    async fn test_accept_trade() {
+        let token_amount_cache = Arc::new(TokenAmountCache::init());
+        let user_address = String::from("Alice");
+
+        token_amount_cache.insert_token_amounts(
+            user_address.clone(),
+            HashMap::from([("TokenA".to_string(), dec!(0.6))]),
+        );
+        let shared = SharedSessions::new(token_amount_cache);
+        let session_id = Uuid::new_v4();
+        let connection_id = Uuid::new_v4();
+
+        let (tx, _rx) = mpsc::channel(10);
+        shared.add_client(session_id, connection_id, tx);
+
+        // Add tokens for user "Alice"
+        let result = shared.add_tokens_offer(
+            &session_id,
+            &user_address,
+            "TokenA".to_string(),
+            dec!(0.1001),
+        );
+        assert!(result.is_ok());
+
+        shared.accept_trade(&session_id, &user_address);
+
+        {
+            let sessions = shared.internal.lock().unwrap();
+            let session = sessions.get(&session_id).expect("Session not found");
+            let alice_tokens = session
+                .state
+                .items
+                .get("Alice")
+                .expect("Alice not found in state");
+
+            assert_eq!(session.state.user_accepted, Some(user_address));
+            assert_eq!(
+                *alice_tokens.get("TokenA").expect("TokenA not found"),
+                dec!(0.1001)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_offering_token_should_revert_accept() {
+        let token_amount_cache = Arc::new(TokenAmountCache::init());
+        let user_address = String::from("Alice");
+
+        token_amount_cache.insert_token_amounts(
+            user_address.clone(),
+            HashMap::from([("TokenA".to_string(), dec!(15))]),
+        );
+        let shared = SharedSessions::new(token_amount_cache);
+        let session_id = Uuid::new_v4();
+        let connection_id = Uuid::new_v4();
+
+        let (tx, _rx) = mpsc::channel(10);
+        shared.add_client(session_id, connection_id, tx);
+
+        // Add tokens for user "Alice"
+        let result = shared.add_tokens_offer(
+            &session_id,
+            &user_address,
+            "TokenA".to_string(),
+            dec!(13.37),
+        );
+        assert!(result.is_ok());
+
+        shared.accept_trade(&session_id, &user_address);
+
+        {
+            let sessions = shared.internal.lock().unwrap();
+            let session = sessions.get(&session_id).expect("Session not found");
+            let alice_tokens = session
+                .state
+                .items
+                .get("Alice")
+                .expect("Alice not found in state");
+
+            assert_eq!(session.state.user_accepted, Some(user_address.clone()));
+            assert_eq!(
+                *alice_tokens.get("TokenA").expect("TokenA not found"),
+                dec!(13.37)
+            );
+        }
+
+        let result = shared.add_tokens_offer(
+            &session_id,
+            &user_address,
+            "TokenA".to_string(),
+            dec!(1.00),
+        );
+        assert!(result.is_ok());
+
+        {
+            let sessions = shared.internal.lock().unwrap();
+            let session = sessions.get(&session_id).expect("Session not found");
+            let alice_tokens = session
+                .state
+                .items
+                .get("Alice")
+                .expect("Alice not found in state");
+
+            assert_eq!(session.state.user_accepted, None);
+            assert_eq!(
+                *alice_tokens.get("TokenA").expect("TokenA not found"),
+                dec!(14.37)
+            );
+        }
+
+    }
+
+    #[tokio::test]
+    async fn test_withdrawing_token_should_revert_accept() {
+        let token_amount_cache = Arc::new(TokenAmountCache::init());
+        let user_address = String::from("Alice");
+
+        token_amount_cache.insert_token_amounts(
+            user_address.clone(),
+            HashMap::from([("TokenA".to_string(), dec!(14))]),
+        );
+        let shared = SharedSessions::new(token_amount_cache);
+        let session_id = Uuid::new_v4();
+        let connection_id = Uuid::new_v4();
+
+        let (tx, _rx) = mpsc::channel(10);
+        shared.add_client(session_id, connection_id, tx);
+
+        // Add tokens for user "Alice"
+        let result = shared.add_tokens_offer(
+            &session_id,
+            &user_address,
+            "TokenA".to_string(),
+            dec!(13.37),
+        );
+        assert!(result.is_ok());
+
+        shared.accept_trade(&session_id, &user_address);
+
+        {
+            let sessions = shared.internal.lock().unwrap();
+            let session = sessions.get(&session_id).expect("Session not found");
+            let alice_tokens = session
+                .state
+                .items
+                .get("Alice")
+                .expect("Alice not found in state");
+
+            assert_eq!(session.state.user_accepted, Some(user_address.clone()));
+            assert_eq!(
+                *alice_tokens.get("TokenA").expect("TokenA not found"),
+                dec!(13.37)
+            );
+        }
+
+        let result = shared.withdraw_tokens(
+            &session_id,
+            &user_address,
+            "TokenA".to_string(),
+            dec!(0.37),
+        );
+        assert!(result.is_ok());
+
+        {
+            let sessions = shared.internal.lock().unwrap();
+            let session = sessions.get(&session_id).expect("Session not found");
+            let alice_tokens = session
+                .state
+                .items
+                .get("Alice")
+                .expect("Alice not found in state");
+
+            assert_eq!(session.state.user_accepted, None);
+            assert_eq!(
+                *alice_tokens.get("TokenA").expect("TokenA not found"),
+                dec!(13.0)
+            );
+        }
+
+    }
 
     #[tokio::test]
     async fn test_add_client() {
@@ -237,8 +433,9 @@ mod tests {
     #[tokio::test]
     async fn test_add_tokens_offer() {
         let token_amount_cache = Arc::new(TokenAmountCache::init());
+        let user_address = String::from("Alice");
         token_amount_cache.insert_token_amounts(
-            "Alice".to_string(),
+            user_address.clone(),
             HashMap::from([("TokenA".to_string(), dec!(0.6))]),
         );
         let shared = SharedSessions::new(token_amount_cache);
@@ -251,7 +448,7 @@ mod tests {
         // Add tokens for user "Alice"
         let result = shared.add_tokens_offer(
             &session_id,
-            "Alice".to_string(),
+            &user_address,
             "TokenA".to_string(),
             dec!(0.1001),
         );
@@ -263,7 +460,7 @@ mod tests {
             let alice_tokens = session
                 .state
                 .items
-                .get("Alice")
+                .get(&user_address)
                 .expect("Alice not found in state");
             assert_eq!(
                 *alice_tokens.get("TokenA").expect("TokenA not found"),
@@ -273,7 +470,7 @@ mod tests {
         // Add more tokens for Alice, same mint
         let result = shared.add_tokens_offer(
             &session_id,
-            "Alice".to_string(),
+            &user_address,
             "TokenA".to_string(),
             dec!(0.5001),
         );
@@ -285,7 +482,7 @@ mod tests {
             let updated_alice_tokens = session
                 .state
                 .items
-                .get("Alice")
+                .get(&user_address)
                 .expect("Alice not found in state");
             assert_eq!(
                 *updated_alice_tokens
@@ -296,21 +493,11 @@ mod tests {
         }
 
         // Add second user "Bob"
-        let result = shared.add_tokens_offer(
-            &session_id,
-            "Bob".to_string(),
-            "TokenB".to_string(),
-            dec!(10),
-        );
+        let result = shared.add_tokens_offer(&session_id, "Bob", "TokenB".to_string(), dec!(10));
         assert!(result.is_ok());
 
         // Try adding a third user should fail because we have a 2-users limit
-        let result = shared.add_tokens_offer(
-            &session_id,
-            "Charlie".to_string(),
-            "TokenC".to_string(),
-            dec!(5),
-        );
+        let result = shared.add_tokens_offer(&session_id, "Charlie", "TokenC".to_string(), dec!(5));
         assert!(result.is_err());
     }
 
@@ -319,7 +506,7 @@ mod tests {
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         let shared = SharedSessions::new(token_amount_cache);
         let session_id = Uuid::new_v4();
-
+        let user_address = String::from("Alice");
         // Create a session with some tokens
         {
             let mut sessions = shared.internal.lock().unwrap();
@@ -330,6 +517,7 @@ mod tests {
             user_map.insert("Alice".to_string(), map);
             session.state = TradeState {
                 items: Arc::new(user_map),
+                user_accepted: None,
             };
             sessions.insert(session_id, session);
         }
@@ -337,7 +525,7 @@ mod tests {
         // Withdraw 50 tokens from Alice's TokenA
         let result = shared.withdraw_tokens(
             &session_id,
-            "Alice".to_string(),
+            &user_address,
             "TokenA".to_string(),
             dec!(50),
         );
@@ -354,7 +542,7 @@ mod tests {
         // Withdraw more tokens than available should not go below zero
         let result = shared.withdraw_tokens(
             &session_id,
-            "Alice".to_string(),
+            &user_address,
             "TokenA".to_string(),
             dec!(100),
         );
@@ -370,7 +558,7 @@ mod tests {
         // Withdrawing a token that does not exist
         let result: std::result::Result<(), Error> = shared.withdraw_tokens(
             &session_id,
-            "Alice".to_string(),
+            &user_address,
             "TokenB".to_string(),
             dec!(10),
         );
@@ -404,12 +592,8 @@ mod tests {
         let (tx, _rx) = mpsc::channel(10);
         shared.add_client(session_id, connection_id, tx);
 
-        let result = shared.add_tokens_offer(
-            &session_id,
-            user_address.to_string(),
-            token_mint.to_string(),
-            dec!(12),
-        );
+        let result =
+            shared.add_tokens_offer(&session_id, &user_address, token_mint.to_string(), dec!(12));
         assert!(result.is_ok());
 
         {
@@ -444,26 +628,14 @@ mod tests {
         let (tx, _rx) = mpsc::channel(10);
         shared.add_client(session_id, connection_id, tx);
 
-        let result = shared.add_tokens_offer(
-            &session_id,
-            user_address.to_string(),
-            token_mint.to_string(),
-            dec!(4),
-        );
+        let result =
+            shared.add_tokens_offer(&session_id, &user_address, token_mint.to_string(), dec!(4));
         assert!(result.is_ok());
-        let result = shared.add_tokens_offer(
-            &session_id,
-            user_address.to_string(),
-            token_mint.to_string(),
-            dec!(4),
-        );
+        let result =
+            shared.add_tokens_offer(&session_id, &user_address, token_mint.to_string(), dec!(4));
         assert!(result.is_ok());
-        let result = shared.add_tokens_offer(
-            &session_id,
-            user_address.to_string(),
-            token_mint.to_string(),
-            dec!(4),
-        );
+        let result =
+            shared.add_tokens_offer(&session_id, &user_address, token_mint.to_string(), dec!(4));
         assert!(result.is_ok());
 
         {
@@ -498,26 +670,14 @@ mod tests {
         let (tx, _rx) = mpsc::channel(10);
         shared.add_client(session_id, connection_id, tx);
 
-        let result = shared.add_tokens_offer(
-            &session_id,
-            user_address.to_string(),
-            token_mint.to_string(),
-            dec!(4),
-        );
+        let result =
+            shared.add_tokens_offer(&session_id, &user_address, token_mint.to_string(), dec!(4));
         assert!(result.is_ok());
-        let result = shared.add_tokens_offer(
-            &session_id,
-            user_address.to_string(),
-            token_mint.to_string(),
-            dec!(4),
-        );
+        let result =
+            shared.add_tokens_offer(&session_id, &user_address, token_mint.to_string(), dec!(4));
         assert!(result.is_ok());
-        let result = shared.add_tokens_offer(
-            &session_id,
-            user_address.to_string(),
-            token_mint.to_string(),
-            dec!(-4),
-        );
+        let result =
+            shared.add_tokens_offer(&session_id, &user_address, token_mint.to_string(), dec!(-4));
         assert!(result.is_ok());
 
         {
@@ -552,16 +712,12 @@ mod tests {
         let (tx, _rx) = mpsc::channel(10);
         shared.add_client(session_id, connection_id, tx);
 
-        let result = shared.add_tokens_offer(
-            &session_id,
-            user_address.to_string(),
-            token_mint.to_string(),
-            dec!(4),
-        );
+        let result =
+            shared.add_tokens_offer(&session_id, &user_address, token_mint.to_string(), dec!(4));
         assert!(result.is_ok());
         let result = shared.withdraw_tokens(
             &session_id,
-            user_address.to_string(),
+            &user_address,
             token_mint.to_string(),
             dec!(-4),
         );
@@ -602,7 +758,7 @@ mod tests {
 
         let result = shared.withdraw_tokens(
             &session_id,
-            user_address.to_string(),
+            &user_address,
             token_mint.to_string(),
             dec!(4),
         );
@@ -627,17 +783,13 @@ mod tests {
         let (tx, _rx) = mpsc::channel(10);
         shared.add_client(session_id, connection_id, tx);
 
-        let result = shared.add_tokens_offer(
-            &session_id,
-            user_address.to_string(),
-            token_mint.to_string(),
-            dec!(4),
-        );
+        let result =
+            shared.add_tokens_offer(&session_id, &user_address, token_mint.to_string(), dec!(4));
         assert!(result.is_ok());
 
         let result = shared.withdraw_tokens(
             &session_id,
-            user_address.to_string(),
+            &user_address,
             token_mint.to_string(),
             dec!(3),
         );
@@ -645,14 +797,14 @@ mod tests {
 
         let result = shared.withdraw_tokens(
             &session_id,
-            user_address.to_string(),
+            &user_address,
             token_mint.to_string(),
             dec!(3),
         );
         assert!(result.is_ok());
         let result = shared.withdraw_tokens(
             &session_id,
-            user_address.to_string(),
+            &user_address,
             token_mint.to_string(),
             dec!(3),
         );
@@ -662,7 +814,11 @@ mod tests {
         {
             let sessions = shared.internal.lock().unwrap();
             let session = sessions.get(&session_id).expect("Session not found");
-            let alice_tokens = session.state.items.get(user_address).expect("Alice not found in state");
+            let alice_tokens = session
+                .state
+                .items
+                .get(user_address)
+                .expect("Alice not found in state");
             assert_eq!(*alice_tokens, HashMap::new());
         }
     }

@@ -14,7 +14,7 @@ impl TokenAmountCache {
         }
     }
 
-    pub fn get_token_amounts(&self, user_address: &String) -> Option<HashMap<String, Decimal>> {
+    pub fn get_token_amounts(&self, user_address: &str) -> Option<HashMap<String, Decimal>> {
         self.cache.lock().unwrap().get(user_address).cloned()
     }
 
