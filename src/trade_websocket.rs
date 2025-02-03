@@ -73,6 +73,12 @@ pub async fn handle_socket(
                                     );
                                     sessions.broadcast_current_state(&session_id);
                                 }
+                                WebsocketMessage::AcceptTrade { user_address
+                                 } => {
+                                    //TODO handle errors
+                                    let _ = sessions.accept_trade(&session_id, &user_address);
+                                    sessions.broadcast_current_state(&session_id);
+                                 }
                                 _ => {}
                             }
                         }
@@ -115,6 +121,10 @@ pub enum WebsocketMessage {
         #[serde(rename = "tokenMint")]
         token_mint: String,
         amount: Decimal,
+    },
+    AcceptTrade {
+        #[serde(rename = "userAddress")]
+        user_address: String,
     },
     TradeStateUpdate {
         offers: Arc<HashMap<String, HashMap<String, Decimal>>>,

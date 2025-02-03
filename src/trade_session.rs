@@ -92,6 +92,7 @@ impl SharedSessions {
                 trade_session.state = TradeState {
                     items: Arc::new(new_state_items),
                     user_accepted: None,
+                    status: TradeStatus::Trading
                 };
             } else if trade_session.state.items.len() == 2 {
                 return Err(Error::msg(
@@ -105,6 +106,7 @@ impl SharedSessions {
                 trade_session.state = TradeState {
                     items: Arc::new(new_state_items),
                     user_accepted: None,
+                    status: TradeStatus::Trading,
                 };
             }
         } else {
@@ -143,6 +145,7 @@ impl SharedSessions {
                 trade_session.state = TradeState {
                     items: Arc::new(new_state_items),
                     user_accepted: None,
+                    status: TradeStatus::Trading,
                 };
             } else {
                 return Err(Error::msg(format!(
@@ -157,7 +160,16 @@ impl SharedSessions {
     pub fn accept_trade(&self, session_id: &SessionId, user_address: &str) -> Result<()> {
         let mut sessions = self.internal.lock().unwrap();
         if let Some(trade_session) = sessions.get_mut(session_id) {
-            trade_session.state.user_accepted = Some(String::from(user_address));
+            if let Some(user_accepted) = &trade_session.state.user_accepted {
+                if *user_accepted != user_address {
+                    trade_session.state.user_accepted = None;
+                trade_session.state.status = TradeStatus::Accepted;
+                }
+            } else {
+                trade_session.state.user_accepted = Some(String::from(user_address));
+                trade_session.state.status = TradeStatus::OneUserAccepted;
+            }
+            
         } else {
             return Err(Error::msg(format!("Session {} not found", session_id)));
         }
@@ -175,6 +187,18 @@ pub struct TradeSession {
 pub struct TradeState {
     pub items: Arc<HashMap<String, HashMap<String, Decimal>>>,
     pub user_accepted: Option<String>,
+    pub status: TradeStatus,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum TradeStatus {
+    #[default]
+    Trading,
+    OneUserAccepted,
+    Accepted,
+    TransactionCreated,
+    OneUserSigned,
+    TransactionSent
 }
 
 #[cfg(test)]
@@ -184,6 +208,55 @@ mod tests {
     use super::*;
     use tokio::sync::mpsc;
     use uuid::Uuid;
+
+    #[tokio::test]
+    async fn test_second_user_accepts() {
+        let token_amount_cache = Arc::new(TokenAmountCache::init());
+        let user_address1 = String::from("Alice");
+        let user_address2 = String::from("Bob");
+
+
+        token_amount_cache.insert_token_amounts(
+            user_address1.clone(),
+            HashMap::from([("TokenA".to_string(), dec!(0.6))]),
+        );
+        let shared = SharedSessions::new(token_amount_cache);
+        let session_id = Uuid::new_v4();
+        let connection_id = Uuid::new_v4();
+
+        let (tx, _rx) = mpsc::channel(10);
+        shared.add_client(session_id, connection_id, tx);
+
+        // Add tokens for user "Alice"
+        let result = shared.add_tokens_offer(
+            &session_id,
+            &user_address1,
+            "TokenA".to_string(),
+            dec!(0.1001),
+        );
+        assert!(result.is_ok());
+
+        let _ = shared.accept_trade(&session_id, &user_address1);
+        let _ = shared.accept_trade(&session_id, &user_address2);
+
+
+        {
+            let sessions = shared.internal.lock().unwrap();
+            let session = sessions.get(&session_id).expect("Session not found");
+            let alice_tokens = session
+                .state
+                .items
+                .get("Alice")
+                .expect("Alice not found in state");
+
+            assert_eq!(session.state.user_accepted, None);
+            assert_eq!(session.state.status, TradeStatus::Accepted);
+            assert_eq!(
+                *alice_tokens.get("TokenA").expect("TokenA not found"),
+                dec!(0.1001)
+            );
+        }
+    }
 
     #[tokio::test]
     async fn test_accept_trade() {
@@ -222,6 +295,7 @@ mod tests {
                 .expect("Alice not found in state");
 
             assert_eq!(session.state.user_accepted, Some(user_address));
+            assert_eq!(session.state.status, TradeStatus::OneUserAccepted);
             assert_eq!(
                 *alice_tokens.get("TokenA").expect("TokenA not found"),
                 dec!(0.1001)
@@ -266,6 +340,7 @@ mod tests {
                 .expect("Alice not found in state");
 
             assert_eq!(session.state.user_accepted, Some(user_address.clone()));
+            assert_eq!(session.state.status, TradeStatus::OneUserAccepted);
             assert_eq!(
                 *alice_tokens.get("TokenA").expect("TokenA not found"),
                 dec!(13.37)
@@ -290,6 +365,8 @@ mod tests {
                 .expect("Alice not found in state");
 
             assert_eq!(session.state.user_accepted, None);
+            assert_eq!(session.state.status, TradeStatus::Trading);
+
             assert_eq!(
                 *alice_tokens.get("TokenA").expect("TokenA not found"),
                 dec!(14.37)
@@ -335,6 +412,7 @@ mod tests {
                 .expect("Alice not found in state");
 
             assert_eq!(session.state.user_accepted, Some(user_address.clone()));
+            assert_eq!(session.state.status, TradeStatus::OneUserAccepted);
             assert_eq!(
                 *alice_tokens.get("TokenA").expect("TokenA not found"),
                 dec!(13.37)
@@ -359,12 +437,57 @@ mod tests {
                 .expect("Alice not found in state");
 
             assert_eq!(session.state.user_accepted, None);
+            assert_eq!(session.state.status, TradeStatus::Trading);
             assert_eq!(
                 *alice_tokens.get("TokenA").expect("TokenA not found"),
                 dec!(13.0)
             );
         }
 
+    }
+
+    #[tokio::test]
+    async fn test_second_user_accept_should_move_trade_state_to_accepted() {
+        let token_amount_cache = Arc::new(TokenAmountCache::init());
+        let user_address = String::from("Alice");
+
+        token_amount_cache.insert_token_amounts(
+            user_address.clone(),
+            HashMap::from([("TokenA".to_string(), dec!(0.6))]),
+        );
+        let shared = SharedSessions::new(token_amount_cache);
+        let session_id = Uuid::new_v4();
+        let connection_id = Uuid::new_v4();
+
+        let (tx, _rx) = mpsc::channel(10);
+        shared.add_client(session_id, connection_id, tx);
+
+        // Add tokens for user "Alice"
+        let result = shared.add_tokens_offer(
+            &session_id,
+            &user_address,
+            "TokenA".to_string(),
+            dec!(0.1001),
+        );
+        assert!(result.is_ok());
+
+        shared.accept_trade(&session_id, &user_address);
+
+        {
+            let sessions = shared.internal.lock().unwrap();
+            let session = sessions.get(&session_id).expect("Session not found");
+            let alice_tokens = session
+                .state
+                .items
+                .get("Alice")
+                .expect("Alice not found in state");
+
+            assert_eq!(session.state.user_accepted, Some(user_address));
+            assert_eq!(
+                *alice_tokens.get("TokenA").expect("TokenA not found"),
+                dec!(0.1001)
+            );
+        }
     }
 
     #[tokio::test]
@@ -518,6 +641,7 @@ mod tests {
             session.state = TradeState {
                 items: Arc::new(user_map),
                 user_accepted: None,
+                status: TradeStatus::Trading
             };
             sessions.insert(session_id, session);
         }
