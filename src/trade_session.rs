@@ -69,8 +69,14 @@ impl SharedSessions {
         if token_amount <= dec!(0) {
             return Ok(());
         }
+        
         let mut sessions = self.internal.lock().unwrap();
         if let Some(trade_session) = sessions.get_mut(session_id) {
+            if !matches!(trade_session.state.status,
+                TradeStatus::Trading | TradeStatus::OneUserAccepted
+            ) {
+                return Err(Error::msg(format!("Invalid action for current trade session state")));
+            }
             let token_amounts = self.token_amount_cache.get_token_amounts(user_address);
             let available_tokens = token_amounts.map_or_else(
                 || dec!(0),
@@ -127,6 +133,11 @@ impl SharedSessions {
         }
         let mut sessions = self.internal.lock().unwrap();
         if let Some(trade_session) = sessions.get_mut(session_id) {
+            if !matches!(trade_session.state.status,
+                TradeStatus::Trading | TradeStatus::OneUserAccepted
+            ) {
+                return Err(Error::msg(format!("Invalid action for current trade session state")));
+            }
             let mut new_state_items = (*trade_session.state.items).clone();
             if let Some(trade_items) = new_state_items.get_mut(user_address) {
                 trade_items.entry(token_mint.clone()).and_modify(|amount| {
@@ -160,6 +171,11 @@ impl SharedSessions {
     pub fn accept_trade(&self, session_id: &SessionId, user_address: &str) -> Result<()> {
         let mut sessions = self.internal.lock().unwrap();
         if let Some(trade_session) = sessions.get_mut(session_id) {
+            if !matches!(trade_session.state.status,
+                TradeStatus::Trading | TradeStatus::OneUserAccepted
+            ) {
+                return Err(Error::msg(format!("Invalid action for current trade session state")));
+            }
             if let Some(user_accepted) = &trade_session.state.user_accepted {
                 if *user_accepted != user_address {
                     trade_session.state.user_accepted = None;
@@ -208,6 +224,130 @@ mod tests {
     use super::*;
     use tokio::sync::mpsc;
     use uuid::Uuid;
+
+    #[tokio::test]
+    async fn test_accept_trade_only_possible_in_trading_or_oneuseraccepted_status() {
+        let token_amount_cache = Arc::new(TokenAmountCache::init());
+        let user_address1 = String::from("Alice");
+
+        token_amount_cache.insert_token_amounts(
+            user_address1.clone(),
+            HashMap::from([("TokenA".to_string(), dec!(0.6))]),
+        );
+        let shared = SharedSessions::new(token_amount_cache);
+        let session_id = Uuid::new_v4();
+        let connection_id = Uuid::new_v4();
+
+        let (tx, _rx) = mpsc::channel(10);
+        shared.add_client(session_id, connection_id, tx);
+
+        // Add tokens for user "Alice"
+        let result = shared.add_tokens_offer(
+            &session_id,
+            &user_address1,
+            "TokenA".to_string(),
+            dec!(0.1001),
+        );
+        assert!(result.is_ok());
+
+        let _ = shared.accept_trade(&session_id, &user_address1);
+       
+
+        // states that should not allow changing token offers
+        for trade_status in vec![TradeStatus::Accepted, TradeStatus::TransactionCreated, TradeStatus::OneUserSigned, TradeStatus::TransactionSent]
+        {
+            //change trade status
+            {
+                let mut sessions = shared.internal.lock().unwrap();
+                let session = sessions.get_mut(&session_id).expect("Session not found");
+                session.state.status = trade_status;
+            }
+            
+            let result = shared.accept_trade(&session_id, &user_address1);
+            assert!(result.is_err());
+    
+        }
+    }
+
+    #[tokio::test]
+    async fn test_trade_must_be_mutable_only_in_trading_or_oneuseraccepted_status() {
+        let token_amount_cache = Arc::new(TokenAmountCache::init());
+        let user_address1 = String::from("Alice");
+
+        token_amount_cache.insert_token_amounts(
+            user_address1.clone(),
+            HashMap::from([("TokenA".to_string(), dec!(0.6))]),
+        );
+        let shared = SharedSessions::new(token_amount_cache);
+        let session_id = Uuid::new_v4();
+        let connection_id = Uuid::new_v4();
+
+        let (tx, _rx) = mpsc::channel(10);
+        shared.add_client(session_id, connection_id, tx);
+
+        // Add tokens for user "Alice"
+        let result = shared.add_tokens_offer(
+            &session_id,
+            &user_address1,
+            "TokenA".to_string(),
+            dec!(0.1001),
+        );
+        assert!(result.is_ok());
+
+        // states that allow mutability
+        for trade_status in vec![TradeStatus::Trading, TradeStatus::OneUserAccepted]
+        {
+            //change trade status
+            {
+                let mut sessions = shared.internal.lock().unwrap();
+                let session = sessions.get_mut(&session_id).expect("Session not found");
+                session.state.status = trade_status;
+            }
+            
+            let result = shared.add_tokens_offer(
+                &session_id,
+                &user_address1,
+                "TokenA".to_string(),
+                dec!(0.1001),
+            );
+            assert!(result.is_ok());
+
+            let result = shared.withdraw_tokens(
+                &session_id,
+                &user_address1,
+                "TokenA".to_string(),
+                dec!(0.0501),
+            );
+            assert!(result.is_ok());
+        }
+
+        // states that should not allow changing token offers
+        for trade_status in vec![TradeStatus::Accepted, TradeStatus::TransactionCreated, TradeStatus::OneUserSigned, TradeStatus::TransactionSent]
+        {
+            //change trade status
+            {
+                let mut sessions = shared.internal.lock().unwrap();
+                let session = sessions.get_mut(&session_id).expect("Session not found");
+                session.state.status = trade_status;
+            }
+            
+            let result = shared.add_tokens_offer(
+                &session_id,
+                &user_address1,
+                "TokenA".to_string(),
+                dec!(0.1001),
+            );
+            assert!(result.is_err());
+
+            let result = shared.withdraw_tokens(
+                &session_id,
+                &user_address1,
+                "TokenA".to_string(),
+                dec!(0.0801),
+            );
+            assert!(result.is_err());
+        }
+    }
 
     #[tokio::test]
     async fn test_second_user_accepts() {
