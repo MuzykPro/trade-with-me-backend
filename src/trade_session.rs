@@ -9,7 +9,7 @@ use std::{
 };
 use tokio::sync::mpsc;
 use uuid::Uuid;
-
+use strum_macros::ToString;
 use crate::token_amount_cache::TokenAmountCache;
 use crate::trade_websocket::WebsocketMessage;
 pub type SessionId = Uuid;
@@ -54,6 +54,8 @@ impl SharedSessions {
             for tx in trade_session.ws_clients.values() {
                 let _ = tx.try_send(WebsocketMessage::TradeStateUpdate {
                     offers: Arc::clone(&trade_session.state.items),
+                    user_acted: trade_session.state.user_acted.clone(),
+                    status: trade_session.state.status.to_string(),
                 });
             }
         }
@@ -97,7 +99,7 @@ impl SharedSessions {
                     .or_insert(cmp::min(token_amount, available_tokens));
                 trade_session.state = TradeState {
                     items: Arc::new(new_state_items),
-                    user_accepted: None,
+                    user_acted: None,
                     status: TradeStatus::Trading
                 };
             } else if trade_session.state.items.len() == 2 {
@@ -111,7 +113,7 @@ impl SharedSessions {
                 );
                 trade_session.state = TradeState {
                     items: Arc::new(new_state_items),
-                    user_accepted: None,
+                    user_acted: None,
                     status: TradeStatus::Trading,
                 };
             }
@@ -155,7 +157,7 @@ impl SharedSessions {
 
                 trade_session.state = TradeState {
                     items: Arc::new(new_state_items),
-                    user_accepted: None,
+                    user_acted: None,
                     status: TradeStatus::Trading,
                 };
             } else {
@@ -176,13 +178,13 @@ impl SharedSessions {
             ) {
                 return Err(Error::msg(format!("Invalid action for current trade session state")));
             }
-            if let Some(user_accepted) = &trade_session.state.user_accepted {
+            if let Some(user_accepted) = &trade_session.state.user_acted {
                 if *user_accepted != user_address {
-                    trade_session.state.user_accepted = None;
+                    trade_session.state.user_acted = None;
                 trade_session.state.status = TradeStatus::Accepted;
                 }
             } else {
-                trade_session.state.user_accepted = Some(String::from(user_address));
+                trade_session.state.user_acted = Some(String::from(user_address));
                 trade_session.state.status = TradeStatus::OneUserAccepted;
             }
             
@@ -202,11 +204,11 @@ pub struct TradeSession {
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct TradeState {
     pub items: Arc<HashMap<String, HashMap<String, Decimal>>>,
-    pub user_accepted: Option<String>,
+    pub user_acted: Option<String>,
     pub status: TradeStatus,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ToString)]
 pub enum TradeStatus {
     #[default]
     Trading,
@@ -389,7 +391,7 @@ mod tests {
                 .get("Alice")
                 .expect("Alice not found in state");
 
-            assert_eq!(session.state.user_accepted, None);
+            assert_eq!(session.state.user_acted, None);
             assert_eq!(session.state.status, TradeStatus::Accepted);
             assert_eq!(
                 *alice_tokens.get("TokenA").expect("TokenA not found"),
@@ -434,7 +436,7 @@ mod tests {
                 .get("Alice")
                 .expect("Alice not found in state");
 
-            assert_eq!(session.state.user_accepted, Some(user_address));
+            assert_eq!(session.state.user_acted, Some(user_address));
             assert_eq!(session.state.status, TradeStatus::OneUserAccepted);
             assert_eq!(
                 *alice_tokens.get("TokenA").expect("TokenA not found"),
@@ -479,7 +481,7 @@ mod tests {
                 .get("Alice")
                 .expect("Alice not found in state");
 
-            assert_eq!(session.state.user_accepted, Some(user_address.clone()));
+            assert_eq!(session.state.user_acted, Some(user_address.clone()));
             assert_eq!(session.state.status, TradeStatus::OneUserAccepted);
             assert_eq!(
                 *alice_tokens.get("TokenA").expect("TokenA not found"),
@@ -504,7 +506,7 @@ mod tests {
                 .get("Alice")
                 .expect("Alice not found in state");
 
-            assert_eq!(session.state.user_accepted, None);
+            assert_eq!(session.state.user_acted, None);
             assert_eq!(session.state.status, TradeStatus::Trading);
 
             assert_eq!(
@@ -551,7 +553,7 @@ mod tests {
                 .get("Alice")
                 .expect("Alice not found in state");
 
-            assert_eq!(session.state.user_accepted, Some(user_address.clone()));
+            assert_eq!(session.state.user_acted, Some(user_address.clone()));
             assert_eq!(session.state.status, TradeStatus::OneUserAccepted);
             assert_eq!(
                 *alice_tokens.get("TokenA").expect("TokenA not found"),
@@ -576,7 +578,7 @@ mod tests {
                 .get("Alice")
                 .expect("Alice not found in state");
 
-            assert_eq!(session.state.user_accepted, None);
+            assert_eq!(session.state.user_acted, None);
             assert_eq!(session.state.status, TradeStatus::Trading);
             assert_eq!(
                 *alice_tokens.get("TokenA").expect("TokenA not found"),
@@ -622,7 +624,7 @@ mod tests {
                 .get("Alice")
                 .expect("Alice not found in state");
 
-            assert_eq!(session.state.user_accepted, Some(user_address));
+            assert_eq!(session.state.user_acted, Some(user_address));
             assert_eq!(
                 *alice_tokens.get("TokenA").expect("TokenA not found"),
                 dec!(0.1001)
@@ -684,8 +686,8 @@ mod tests {
 
         match (msg1, msg2) {
             (
-                WebsocketMessage::TradeStateUpdate { offers: _ },
-                WebsocketMessage::TradeStateUpdate { offers: _ },
+                WebsocketMessage::TradeStateUpdate { offers: _, user_acted: _, status: _ },
+                WebsocketMessage::TradeStateUpdate { offers: _ , user_acted: _, status: _},
             ) => {
                 // Just ensuring that both got the correct variant
             }
@@ -780,7 +782,7 @@ mod tests {
             user_map.insert("Alice".to_string(), map);
             session.state = TradeState {
                 items: Arc::new(user_map),
-                user_accepted: None,
+                user_acted: None,
                 status: TradeStatus::Trading
             };
             sessions.insert(session_id, session);

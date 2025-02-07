@@ -18,7 +18,7 @@ impl TokenAmountCache {
         self.cache.lock().unwrap().get(user_address).cloned()
     }
 
-    pub fn insert_token_amounts(&self, user_address: String, token_amounts: HashMap<String, Decimal>) {
+    pub fn insert_token_amounts(&self, user_address: String, token_amounts: HashMap<String, Decimal>) {      
         self.cache.lock().unwrap().insert(user_address, token_amounts);
     }
 

@@ -1,6 +1,6 @@
 use axum::extract::ws::{Message, WebSocket};
 use futures::{SinkExt, StreamExt};
-use log::info;
+use log::{debug, info};
 use rust_decimal::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
@@ -28,6 +28,7 @@ pub async fn handle_socket(
         while let Some(msg) = rx.recv().await {
             let msg_json_result = serde_json::to_string(&msg);
             if let Ok(msg_json) = msg_json_result {
+                debug!("Sending ws message {:#?}", &msg_json);
                 if ws_sink.send(Message::Text(msg_json)).await.is_err() {
                     // If send fails, client disconnected
                     break;
@@ -128,6 +129,9 @@ pub enum WebsocketMessage {
     },
     TradeStateUpdate {
         offers: Arc<HashMap<String, HashMap<String, Decimal>>>,
+        #[serde(rename = "userActed")]
+        user_acted: Option<String>,
+        status: String
     },
 }
 
@@ -162,7 +166,15 @@ mod tests {
             .is_test(true) // Ensures output works correctly during tests
             .init();
         // 1. Create shared state
+
+        let alice_address = String::from("Alice");
+        let token_mint = String::from("TokenA");
         let token_amount_cache = Arc::new(TokenAmountCache::init());
+        token_amount_cache.insert_token_amounts(
+            alice_address.clone(),
+            HashMap::from([(token_mint.clone(), dec!(200.0))]),
+        );
+
         let shared_sessions = Arc::new(SharedSessions::new(token_amount_cache));
 
         // 2. Set up an Axum router with a WebSocket route
@@ -193,11 +205,12 @@ mod tests {
 
         // 6. Client1 sends an OfferTokens message
         let offer_tokens = WebsocketMessage::OfferTokens {
-            user_address: "Alice".to_string(),
-            token_mint: "TokenA".to_string(),
+            user_address: alice_address.clone(),
+            token_mint: token_mint.clone(),
             amount: dec!(100.1337),
         };
         let offer_json = serde_json::to_string(&offer_tokens)?;
+        info!("Offer json: {:#?}", &offer_json);
         ws1.send(Message::Text(offer_json.into())).await?;
 
         // 7. Both clients should eventually receive a TradeStateUpdate
@@ -207,32 +220,40 @@ mod tests {
         let mut received_update_ws2 = false;
 
         // Because each client might receive some messages in different orders, we'll attempt to read a few times.
-        for _ in 0..2 {
+
+        for _ in 0..3 {
             if let Some(Ok(msg)) = ws1.next().await {
                 if let Message::Text(payload) = msg {
                     if let Ok(parsed) = serde_json::from_str::<WebsocketMessage>(&payload) {
-                        if let WebsocketMessage::TradeStateUpdate { offers } = parsed {
-                            received_update_ws1 = true;
-                            // Check the data if needed:
-                            let maybe_alice = offers.get("Alice");
-                            assert!(maybe_alice.is_some(), "No 'Alice' user in update");
-                            let alice_map = maybe_alice.unwrap();
-                            assert_eq!(alice_map.get("TokenA"), Some(&dec!(100.1337)));
+                        if let WebsocketMessage::TradeStateUpdate { offers, user_acted, status } = parsed {
+                            if let Some(alice_map) = offers.get(&alice_address) {
+                                received_update_ws1 = true;
+                                // Check the data if needed:
+                                // let maybe_alice = offers.get(&alice_address);
+                                // assert!(maybe_alice.is_some(), "No 'Alice' user in update");
+                                // let alice_map = alice.unwrap();
+                                assert_eq!(alice_map.get(&token_mint), Some(&dec!(100.1337)));
+                            }
+                            
                         }
                     }
                 }
             }
+        }
 
+        for _ in 0..2 {           
             if let Some(Ok(msg)) = ws2.next().await {
                 if let Message::Text(payload) = msg {
                     if let Ok(parsed) = serde_json::from_str::<WebsocketMessage>(&payload) {
-                        if let WebsocketMessage::TradeStateUpdate { offers } = parsed {
-                            received_update_ws2 = true;
-                            // Check the data if needed:
-                            let maybe_alice = offers.get("Alice");
-                            assert!(maybe_alice.is_some(), "No 'Alice' user in update");
-                            let alice_map = maybe_alice.unwrap();
-                            assert_eq!(alice_map.get("TokenA"), Some(&dec!(100.1337)));
+                        if let WebsocketMessage::TradeStateUpdate { offers, user_acted, status } = parsed {
+                            if let Some(alice_map) = offers.get(&alice_address) {
+                                received_update_ws2 = true;
+                                // Check the data if needed:
+                                // let maybe_alice = offers.get(&alice_address);
+                                // assert!(maybe_alice.is_some(), "No 'Alice' user in update");
+                                // let alice_map = alice.unwrap();
+                                assert_eq!(alice_map.get(&token_mint), Some(&dec!(100.1337)));
+                            }
                         }
                     }
                 }
