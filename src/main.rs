@@ -30,6 +30,7 @@ pub mod trade_service;
 pub mod trade_websocket;
 pub mod trade_session;
 pub mod token_amount_cache;
+pub mod transaction_service;
 
 // example token holder address: 87UGBXfeuCaMyxNnCD3a9Wcbjc5C8c34hbKEBUfc2F86
 #[tokio::main]

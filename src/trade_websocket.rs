@@ -80,6 +80,18 @@ pub async fn handle_socket(
                                     let _ = sessions.accept_trade(&session_id, &user_address);
                                     sessions.broadcast_current_state(&session_id);
                                  }
+                                 WebsocketMessage::GetTransactionToSign { user_address
+                                 } => {
+                                    //TODO handle errors
+                                    // let _ = sessions.get_transaction_to_sign(&session_id, &user_address);
+                                    sessions.broadcast_current_state(&session_id);
+                                 }
+                                 WebsocketMessage::SignedTransaction { user_address, signature
+                                 } => {
+                                    //TODO handle errors
+                                    // let _ = sessions.sign_transaction(&session_id, &signature);
+                                    sessions.broadcast_current_state(&session_id);
+                                 }
                                 _ => {}
                             }
                         }
@@ -126,6 +138,15 @@ pub enum WebsocketMessage {
     AcceptTrade {
         #[serde(rename = "userAddress")]
         user_address: String,
+    },
+    GetTransactionToSign {
+        #[serde(rename = "userAddress")]
+        user_address: String,
+    },
+    SignedTransaction {
+        #[serde(rename = "userAddress")]
+        user_address: String,
+        signature: String
     },
     TradeStateUpdate {
         offers: Arc<HashMap<String, HashMap<String, Decimal>>>,

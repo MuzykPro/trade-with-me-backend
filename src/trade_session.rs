@@ -9,7 +9,7 @@ use std::{
 };
 use tokio::sync::mpsc;
 use uuid::Uuid;
-use strum_macros::ToString;
+use strum_macros::Display;
 use crate::token_amount_cache::TokenAmountCache;
 use crate::trade_websocket::WebsocketMessage;
 pub type SessionId = Uuid;
@@ -193,6 +193,14 @@ impl SharedSessions {
         }
         Ok(())
     }
+
+    pub fn get_transaction_to_sign(&self, session_id: &SessionId, ) -> Result<()> {
+        Ok(())
+    }
+    pub fn sign_transaction(&self, session_id: &SessionId, signature: String) -> Result<()> {
+        Ok(())
+    }
+
 }
 
 #[derive(Default)]
@@ -208,7 +216,7 @@ pub struct TradeState {
     pub status: TradeStatus,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ToString)]
+#[derive(Clone, Debug, Display, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum TradeStatus {
     #[default]
     Trading,
