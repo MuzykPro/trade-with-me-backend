@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use chain_context::MainnetChainContext;
 use config::Config;
 use db::PostgreSqlClient;
 use env_logger::Env;
@@ -17,6 +18,7 @@ use token_service::TokenService;
 use trade_repository::TradeRepository;
 use trade_service::TradeService;
 use trade_session::SharedSessions;
+use transaction_service::TransactionService;
 
 pub mod config;
 pub mod db;
@@ -31,6 +33,7 @@ pub mod trade_websocket;
 pub mod trade_session;
 pub mod token_amount_cache;
 pub mod transaction_service;
+pub mod chain_context;
 
 // example token holder address: 87UGBXfeuCaMyxNnCD3a9Wcbjc5C8c34hbKEBUfc2F86
 #[tokio::main]
@@ -52,7 +55,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         token_service: Arc::new(token_service),
         trade_service: Arc::new(trade_service)
     };
-    let trade_sessions = Arc::new(SharedSessions::new(Arc::clone(&token_amount_cache)));
+    let transaction_service = Arc::new(TransactionService::new(Arc::new(MainnetChainContext::new(Arc::clone(&rpc_client)))));
+    let trade_sessions = Arc::new(SharedSessions::new(Arc::clone(&token_amount_cache), Arc::clone(&transaction_service)));
     let router = get_router(Arc::new(app_state), trade_sessions);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();

@@ -8,12 +8,12 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::trade_session::{SessionId, SharedSessions};
+use crate::{chain_context::ChainContext, trade_session::{SessionId, SharedSessions}};
 
-pub async fn handle_socket(
+pub async fn handle_socket<T: ChainContext + Sync + Send + 'static>(
     socket: WebSocket,
     session_id: SessionId,
-    sessions: Arc<SharedSessions>,
+    sessions: Arc<SharedSessions<T>>,
 ) {
     let connection_id = Uuid::new_v4();
 
@@ -164,7 +164,7 @@ pub struct TokenOffer {
 
 #[cfg(test)]
 mod tests {
-    use crate::token_amount_cache::TokenAmountCache;
+    use crate::{chain_context::TestChainContext, token_amount_cache::TokenAmountCache, transaction_service::TransactionService};
 
     use super::*; // If your code is in the same module/crate. Otherwise, import appropriately.
     use axum::{
@@ -187,6 +187,7 @@ mod tests {
             .is_test(true) // Ensures output works correctly during tests
             .init();
         // 1. Create shared state
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
 
         let alice_address = String::from("Alice");
         let token_mint = String::from("TokenA");
@@ -196,7 +197,7 @@ mod tests {
             HashMap::from([(token_mint.clone(), dec!(200.0))]),
         );
 
-        let shared_sessions = Arc::new(SharedSessions::new(token_amount_cache));
+        let shared_sessions = Arc::new(SharedSessions::new(token_amount_cache, transaction_service));
 
         // 2. Set up an Axum router with a WebSocket route
         let app = Router::new().route(

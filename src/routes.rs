@@ -12,17 +12,16 @@ use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 use crate::{
-    token_service::TokenService, trade_service::TradeService, trade_session::SharedSessions,
-    trade_websocket::handle_socket,
+    chain_context::{ChainContext}, token_service::TokenService, trade_service::TradeService, trade_session::SharedSessions, trade_websocket::handle_socket
 };
 
-pub fn get_router(app_state: Arc<AppState>, sessions: Arc<SharedSessions>) -> Router {
+pub fn get_router<T: ChainContext + Sync + Send + 'static>(app_state: Arc<AppState>, sessions: Arc<SharedSessions<T>>) -> Router {
     Router::new()
         .route("/", get(root))
         .route("/tokens", get(get_tokens))
         .route("/tokens/metadata", get(get_token_metadata))
         .route("/trading_session", post(create_trade_session))
-        .route("/ws/trading_session/:session_id", get(websocket_handler))
+        .route("/ws/trading_session/:session_id", get(websocket_handler::<T>))
         .with_state(app_state)
         .layer(Extension(sessions))
         .layer(CorsLayer::permissive())
@@ -54,10 +53,10 @@ async fn get_token_metadata(
     }
 }
 
-async fn websocket_handler(
+async fn websocket_handler<T: ChainContext + Sync + Send + 'static>(
     ws: WebSocketUpgrade,
     Path(params): Path<SessionPathParam>,
-    Extension(sessions): Extension<Arc<SharedSessions>>,
+    Extension(sessions): Extension<Arc<SharedSessions<T>>>,
 ) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, params.session_id, sessions))
 }

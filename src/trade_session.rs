@@ -10,20 +10,24 @@ use std::{
 use tokio::sync::mpsc;
 use uuid::Uuid;
 use strum_macros::Display;
+use crate::chain_context::ChainContext;
 use crate::token_amount_cache::TokenAmountCache;
 use crate::trade_websocket::WebsocketMessage;
+use crate::transaction_service::{self, TransactionService};
 pub type SessionId = Uuid;
 pub type ConnectionId = Uuid;
 
-pub struct SharedSessions {
+pub struct SharedSessions<T: ChainContext> {
     internal: Mutex<HashMap<SessionId, TradeSession>>,
     token_amount_cache: Arc<TokenAmountCache>,
+    transaction_service: Arc<TransactionService<T>>,
 }
-impl SharedSessions {
-    pub fn new(token_amount_cache: Arc<TokenAmountCache>) -> Self {
+impl<T: ChainContext> SharedSessions<T> {
+    pub fn new(token_amount_cache: Arc<TokenAmountCache>, transaction_service: Arc<TransactionService<T>>) -> Self {
         SharedSessions {
             internal: Mutex::default(),
             token_amount_cache,
+            transaction_service,
         }
     }
 
@@ -229,22 +233,24 @@ pub enum TradeStatus {
 
 #[cfg(test)]
 mod tests {
-    use crate::token_amount_cache;
+    use crate::{chain_context::TestChainContext, token_amount_cache};
 
     use super::*;
+    use solana_sdk::transaction;
     use tokio::sync::mpsc;
     use uuid::Uuid;
 
     #[tokio::test]
     async fn test_accept_trade_only_possible_in_trading_or_oneuseraccepted_status() {
         let token_amount_cache = Arc::new(TokenAmountCache::init());
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
         let user_address1 = String::from("Alice");
 
         token_amount_cache.insert_token_amounts(
             user_address1.clone(),
             HashMap::from([("TokenA".to_string(), dec!(0.6))]),
         );
-        let shared = SharedSessions::new(token_amount_cache);
+        let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
         let connection_id = Uuid::new_v4();
 
@@ -283,12 +289,13 @@ mod tests {
     async fn test_trade_must_be_mutable_only_in_trading_or_oneuseraccepted_status() {
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         let user_address1 = String::from("Alice");
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
 
         token_amount_cache.insert_token_amounts(
             user_address1.clone(),
             HashMap::from([("TokenA".to_string(), dec!(0.6))]),
         );
-        let shared = SharedSessions::new(token_amount_cache);
+        let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
         let connection_id = Uuid::new_v4();
 
@@ -364,13 +371,14 @@ mod tests {
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         let user_address1 = String::from("Alice");
         let user_address2 = String::from("Bob");
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
 
 
         token_amount_cache.insert_token_amounts(
             user_address1.clone(),
             HashMap::from([("TokenA".to_string(), dec!(0.6))]),
         );
-        let shared = SharedSessions::new(token_amount_cache);
+        let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
         let connection_id = Uuid::new_v4();
 
@@ -412,12 +420,13 @@ mod tests {
     async fn test_accept_trade() {
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         let user_address = String::from("Alice");
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
 
         token_amount_cache.insert_token_amounts(
             user_address.clone(),
             HashMap::from([("TokenA".to_string(), dec!(0.6))]),
         );
-        let shared = SharedSessions::new(token_amount_cache);
+        let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
         let connection_id = Uuid::new_v4();
 
@@ -457,12 +466,13 @@ mod tests {
     async fn test_offering_token_should_revert_accept() {
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         let user_address = String::from("Alice");
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
 
         token_amount_cache.insert_token_amounts(
             user_address.clone(),
             HashMap::from([("TokenA".to_string(), dec!(15))]),
         );
-        let shared = SharedSessions::new(token_amount_cache);
+        let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
         let connection_id = Uuid::new_v4();
 
@@ -529,12 +539,13 @@ mod tests {
     async fn test_withdrawing_token_should_revert_accept() {
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         let user_address = String::from("Alice");
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
 
         token_amount_cache.insert_token_amounts(
             user_address.clone(),
             HashMap::from([("TokenA".to_string(), dec!(14))]),
         );
-        let shared = SharedSessions::new(token_amount_cache);
+        let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
         let connection_id = Uuid::new_v4();
 
@@ -600,12 +611,13 @@ mod tests {
     async fn test_second_user_accept_should_move_trade_state_to_accepted() {
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         let user_address = String::from("Alice");
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
 
         token_amount_cache.insert_token_amounts(
             user_address.clone(),
             HashMap::from([("TokenA".to_string(), dec!(0.6))]),
         );
-        let shared = SharedSessions::new(token_amount_cache);
+        let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
         let connection_id = Uuid::new_v4();
 
@@ -642,8 +654,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_client() {
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
-        let shared = SharedSessions::new(token_amount_cache);
+        let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
         let connection_id = Uuid::new_v4();
 
@@ -657,8 +670,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_client() {
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
-        let shared = SharedSessions::new(token_amount_cache);
+        let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
         let connection_id = Uuid::new_v4();
 
@@ -675,8 +689,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_broadcast_current_state() {
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
-        let shared = SharedSessions::new(token_amount_cache);
+        let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
         let connection_id_1 = Uuid::new_v4();
         let connection_id_2 = Uuid::new_v4();
@@ -705,13 +720,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_tokens_offer() {
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         let user_address = String::from("Alice");
         token_amount_cache.insert_token_amounts(
             user_address.clone(),
             HashMap::from([("TokenA".to_string(), dec!(0.6))]),
         );
-        let shared = SharedSessions::new(token_amount_cache);
+        let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
         let connection_id = Uuid::new_v4();
 
@@ -776,8 +792,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_withdraw_tokens() {
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
-        let shared = SharedSessions::new(token_amount_cache);
+        let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
         let user_address = String::from("Alice");
         // Create a session with some tokens
@@ -854,12 +871,13 @@ mod tests {
         let user_address = "Alice";
         let token_mint = "TokenA";
         let available_tokens = dec!(10);
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         token_amount_cache.insert_token_amounts(
             user_address.to_owned(),
             HashMap::from([(token_mint.to_string(), available_tokens)]),
         );
-        let shared = SharedSessions::new(token_amount_cache);
+        let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
         let connection_id = Uuid::new_v4();
 
@@ -890,12 +908,13 @@ mod tests {
         let user_address = "Alice";
         let token_mint = "TokenA";
         let available_tokens = dec!(10);
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         token_amount_cache.insert_token_amounts(
             user_address.to_owned(),
             HashMap::from([(token_mint.to_string(), available_tokens)]),
         );
-        let shared = SharedSessions::new(token_amount_cache);
+        let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
         let connection_id = Uuid::new_v4();
 
@@ -932,12 +951,13 @@ mod tests {
         let user_address = "Alice";
         let token_mint = "TokenA";
         let available_tokens = dec!(10);
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         token_amount_cache.insert_token_amounts(
             user_address.to_owned(),
             HashMap::from([(token_mint.to_string(), available_tokens)]),
         );
-        let shared = SharedSessions::new(token_amount_cache);
+        let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
         let connection_id = Uuid::new_v4();
 
@@ -974,12 +994,13 @@ mod tests {
         let user_address = "Alice";
         let token_mint = "TokenA";
         let available_tokens = dec!(10);
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         token_amount_cache.insert_token_amounts(
             user_address.to_owned(),
             HashMap::from([(token_mint.to_string(), available_tokens)]),
         );
-        let shared = SharedSessions::new(token_amount_cache);
+        let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
         let connection_id = Uuid::new_v4();
 
@@ -1018,12 +1039,13 @@ mod tests {
         let user_address = "Alice";
         let token_mint = "TokenA";
         let available_tokens = dec!(10);
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         token_amount_cache.insert_token_amounts(
             user_address.to_owned(),
             HashMap::from([(token_mint.to_string(), available_tokens)]),
         );
-        let shared = SharedSessions::new(token_amount_cache);
+        let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
         let connection_id = Uuid::new_v4();
 
@@ -1045,12 +1067,13 @@ mod tests {
         let user_address = "Alice";
         let token_mint = "TokenA";
         let available_tokens = dec!(10);
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         token_amount_cache.insert_token_amounts(
             user_address.to_owned(),
             HashMap::from([(token_mint.to_string(), available_tokens)]),
         );
-        let shared = SharedSessions::new(token_amount_cache);
+        let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
         let connection_id = Uuid::new_v4();
 
