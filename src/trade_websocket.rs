@@ -3,6 +3,7 @@ use futures::{SinkExt, StreamExt};
 use log::{debug, info};
 use rust_decimal::prelude::*;
 use serde::{Deserialize, Serialize};
+use solana_sdk::transaction::Transaction;
 use std::{collections::HashMap, sync::Arc};
 
 use tokio::sync::mpsc;
@@ -83,7 +84,7 @@ pub async fn handle_socket<T: ChainContext + Sync + Send + 'static>(
                                  WebsocketMessage::GetTransactionToSign { user_address
                                  } => {
                                     //TODO handle errors
-                                    // let _ = sessions.get_transaction_to_sign(&session_id, &user_address);
+                                    let _ = sessions.get_transaction_to_sign(&session_id, &user_address);
                                     sessions.broadcast_current_state(&session_id);
                                  }
                                  WebsocketMessage::SignedTransaction { user_address, signature
@@ -152,7 +153,8 @@ pub enum WebsocketMessage {
         offers: Arc<HashMap<String, HashMap<String, Decimal>>>,
         #[serde(rename = "userActed")]
         user_acted: Option<String>,
-        status: String
+        status: String,
+        tx: Option<Transaction>
     },
 }
 
@@ -247,7 +249,7 @@ mod tests {
             if let Some(Ok(msg)) = ws1.next().await {
                 if let Message::Text(payload) = msg {
                     if let Ok(parsed) = serde_json::from_str::<WebsocketMessage>(&payload) {
-                        if let WebsocketMessage::TradeStateUpdate { offers, user_acted, status } = parsed {
+                        if let WebsocketMessage::TradeStateUpdate { offers, user_acted, status, tx } = parsed {
                             if let Some(alice_map) = offers.get(&alice_address) {
                                 received_update_ws1 = true;
                                 // Check the data if needed:
@@ -267,7 +269,7 @@ mod tests {
             if let Some(Ok(msg)) = ws2.next().await {
                 if let Message::Text(payload) = msg {
                     if let Ok(parsed) = serde_json::from_str::<WebsocketMessage>(&payload) {
-                        if let WebsocketMessage::TradeStateUpdate { offers, user_acted, status } = parsed {
+                        if let WebsocketMessage::TradeStateUpdate { offers, user_acted, status, tx } = parsed {
                             if let Some(alice_map) = offers.get(&alice_address) {
                                 received_update_ws2 = true;
                                 // Check the data if needed:

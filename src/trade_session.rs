@@ -1,6 +1,7 @@
 use anyhow::*;
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
+use solana_sdk::transaction::Transaction;
 use std::cmp;
 use std::result::Result::Ok;
 use std::{
@@ -60,6 +61,7 @@ impl<T: ChainContext> SharedSessions<T> {
                     offers: Arc::clone(&trade_session.state.items),
                     user_acted: trade_session.state.user_acted.clone(),
                     status: trade_session.state.status.to_string(),
+                    tx: trade_session.state.tx.clone()
                 });
             }
         }
@@ -104,7 +106,8 @@ impl<T: ChainContext> SharedSessions<T> {
                 trade_session.state = TradeState {
                     items: Arc::new(new_state_items),
                     user_acted: None,
-                    status: TradeStatus::Trading
+                    status: TradeStatus::Trading,
+                    tx: None,
                 };
             } else if trade_session.state.items.len() == 2 {
                 return Err(Error::msg(
@@ -119,6 +122,7 @@ impl<T: ChainContext> SharedSessions<T> {
                     items: Arc::new(new_state_items),
                     user_acted: None,
                     status: TradeStatus::Trading,
+                    tx: None,
                 };
             }
         } else {
@@ -163,6 +167,7 @@ impl<T: ChainContext> SharedSessions<T> {
                     items: Arc::new(new_state_items),
                     user_acted: None,
                     status: TradeStatus::Trading,
+                    tx: None,
                 };
             } else {
                 return Err(Error::msg(format!(
@@ -198,7 +203,24 @@ impl<T: ChainContext> SharedSessions<T> {
         Ok(())
     }
 
-    pub fn get_transaction_to_sign(&self, session_id: &SessionId, ) -> Result<()> {
+    pub async fn get_transaction_to_sign(&self, session_id: &SessionId, user_address: &str) -> Result<()> {
+        let mut sessions = self.internal.lock().unwrap();
+        if let Some(trade_session) = sessions.get_mut(session_id) {
+            if !matches!(trade_session.state.status,
+                TradeStatus::Accepted | TradeStatus::TransactionCreated
+            ) {
+                return Err(Error::msg(format!("Invalid action for current trade session state")));
+            }
+            // only create transaction once, act idempotently
+            if trade_session.state.user_acted.is_none() {
+                let tx = self.transaction_service.create_transaction(Arc::clone(&trade_session.state.items)).await?;
+                trade_session.state.tx = Some(tx);
+                trade_session.state.user_acted = Some(String::from(user_address));
+                trade_session.state.status = TradeStatus::TransactionCreated;
+            }
+            
+        }
+
         Ok(())
     }
     pub fn sign_transaction(&self, session_id: &SessionId, signature: String) -> Result<()> {
@@ -218,6 +240,7 @@ pub struct TradeState {
     pub items: Arc<HashMap<String, HashMap<String, Decimal>>>,
     pub user_acted: Option<String>,
     pub status: TradeStatus,
+    pub tx: Option<Transaction>
 }
 
 #[derive(Clone, Debug, Display, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -236,9 +259,84 @@ mod tests {
     use crate::{chain_context::TestChainContext, token_amount_cache};
 
     use super::*;
-    use solana_sdk::transaction;
+    use solana_sdk::{pubkey::Pubkey, transaction};
     use tokio::sync::mpsc;
     use uuid::Uuid;
+
+
+    #[tokio::test]
+    async fn test_get_transaction_to_sign_possible_in_accepted_state() {
+        let token_amount_cache = Arc::new(TokenAmountCache::init());
+        let user_address1 = String::from("DuiJXfXdZdcJQko3LugHAAWR9RgQPNXVXk79y691rpHg");
+        let user_address2 = String::from("2qkf9i5rEjDJ53izfccdEmUhW1LkgMzgCDz1SG3zYYym");
+        let token_a = String::from("FKqe4pSujn57nL8JD62mYfwsnJ6bE9HCr5wr6C7nBzGM");
+        let token_b = String::from("HBc27s2MjdMK8Bg46KzKBuZAk1EvTioTKVaxxcnn1hJW");
+
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
+
+
+        token_amount_cache.insert_token_amounts(
+            user_address1.clone(),
+            HashMap::from([(token_a.clone(), dec!(0.6))]),
+        );
+        token_amount_cache.insert_token_amounts(
+            user_address2.clone(),
+            HashMap::from([(token_b.clone(), dec!(2.0))]),
+        );
+        let shared = SharedSessions::new(token_amount_cache, transaction_service);
+        let session_id = Uuid::new_v4();
+        let connection_id = Uuid::new_v4();
+
+        let (tx, _rx) = mpsc::channel(10);
+        shared.add_client(session_id, connection_id, tx);
+
+        // Add tokens for user "Alice"
+        let result = shared.add_tokens_offer(
+            &session_id,
+            &user_address1,
+            token_a.clone(),
+            dec!(0.1001),
+        );
+        assert!(result.is_ok());
+
+        let result = shared.add_tokens_offer(
+            &session_id,
+            &user_address2,
+            token_b.clone(),
+            dec!(0.5),
+        );
+        assert!(result.is_ok());
+
+        let _ = shared.accept_trade(&session_id, &user_address1);
+        let _ = shared.accept_trade(&session_id, &user_address2);
+
+        {
+            let sessions = shared.internal.lock().unwrap();
+            let session = sessions.get(&session_id).expect("Session not found");
+            assert_eq!(session.state.user_acted, None);
+            assert_eq!(session.state.status, TradeStatus::Accepted);        
+        }
+
+        let result = shared.get_transaction_to_sign(&session_id, &user_address1).await;
+
+        if let Err(e) = result {
+            println!("Error: {:#?}", e.backtrace());
+        }
+        {
+            let sessions = shared.internal.lock().unwrap();
+            let session = sessions.get(&session_id).expect("Session not found");
+            assert_eq!(session.state.user_acted, Some(user_address1.clone()), "User acted missing after transaction created");
+            assert_eq!(session.state.status, TradeStatus::TransactionCreated, "Transaction should be in TransactionCreated state");    
+            let tx = session.state.tx.clone().unwrap();
+            assert_eq!(tx.message().account_keys.len(), 9);
+            assert!(tx.message().account_keys.contains(&Pubkey::from_str(&user_address1).unwrap()));
+            assert!(tx.message().account_keys.contains(&Pubkey::from_str(&user_address2).unwrap()));
+            assert!(tx.message().account_keys.contains(&Pubkey::from_str(&token_a).unwrap()));
+            assert!(tx.message().account_keys.contains(&Pubkey::from_str(&token_b).unwrap()));
+
+            println!("Tx message: {:#?}", tx.message());
+        }
+    }
 
     #[tokio::test]
     async fn test_accept_trade_only_possible_in_trading_or_oneuseraccepted_status() {
@@ -709,8 +807,8 @@ mod tests {
 
         match (msg1, msg2) {
             (
-                WebsocketMessage::TradeStateUpdate { offers: _, user_acted: _, status: _ },
-                WebsocketMessage::TradeStateUpdate { offers: _ , user_acted: _, status: _},
+                WebsocketMessage::TradeStateUpdate { offers: _, user_acted: _, status: _ , tx: _},
+                WebsocketMessage::TradeStateUpdate { offers: _ , user_acted: _, status: _, tx: _},
             ) => {
                 // Just ensuring that both got the correct variant
             }
@@ -808,7 +906,8 @@ mod tests {
             session.state = TradeState {
                 items: Arc::new(user_map),
                 user_acted: None,
-                status: TradeStatus::Trading
+                status: TradeStatus::Trading,
+                tx: None,
             };
             sessions.insert(session_id, session);
         }
