@@ -1,3 +1,7 @@
+use crate::chain_context::ChainContext;
+use crate::token_amount_cache::TokenAmountCache;
+use crate::trade_websocket::WebsocketMessage;
+use crate::transaction_service::{self, TransactionService};
 use anyhow::*;
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
@@ -8,13 +12,9 @@ use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
+use strum_macros::Display;
 use tokio::sync::mpsc;
 use uuid::Uuid;
-use strum_macros::Display;
-use crate::chain_context::ChainContext;
-use crate::token_amount_cache::TokenAmountCache;
-use crate::trade_websocket::WebsocketMessage;
-use crate::transaction_service::{self, TransactionService};
 pub type SessionId = Uuid;
 pub type ConnectionId = Uuid;
 
@@ -24,7 +24,10 @@ pub struct SharedSessions<T: ChainContext> {
     transaction_service: Arc<TransactionService<T>>,
 }
 impl<T: ChainContext> SharedSessions<T> {
-    pub fn new(token_amount_cache: Arc<TokenAmountCache>, transaction_service: Arc<TransactionService<T>>) -> Self {
+    pub fn new(
+        token_amount_cache: Arc<TokenAmountCache>,
+        transaction_service: Arc<TransactionService<T>>,
+    ) -> Self {
         SharedSessions {
             internal: Mutex::default(),
             token_amount_cache,
@@ -61,7 +64,7 @@ impl<T: ChainContext> SharedSessions<T> {
                     offers: Arc::clone(&trade_session.state.items),
                     user_acted: trade_session.state.user_acted.clone(),
                     status: trade_session.state.status.to_string(),
-                    tx: trade_session.state.tx.clone()
+                    tx: trade_session.state.tx.clone(),
                 });
             }
         }
@@ -77,13 +80,16 @@ impl<T: ChainContext> SharedSessions<T> {
         if token_amount <= dec!(0) {
             return Ok(());
         }
-        
+
         let mut sessions = self.internal.lock().unwrap();
         if let Some(trade_session) = sessions.get_mut(session_id) {
-            if !matches!(trade_session.state.status,
+            if !matches!(
+                trade_session.state.status,
                 TradeStatus::Trading | TradeStatus::OneUserAccepted
             ) {
-                return Err(Error::msg(format!("Invalid action for current trade session state")));
+                return Err(Error::msg(format!(
+                    "Invalid action for current trade session state"
+                )));
             }
             let token_amounts = self.token_amount_cache.get_token_amounts(user_address);
             let available_tokens = token_amounts.map_or_else(
@@ -143,10 +149,13 @@ impl<T: ChainContext> SharedSessions<T> {
         }
         let mut sessions = self.internal.lock().unwrap();
         if let Some(trade_session) = sessions.get_mut(session_id) {
-            if !matches!(trade_session.state.status,
+            if !matches!(
+                trade_session.state.status,
                 TradeStatus::Trading | TradeStatus::OneUserAccepted
             ) {
-                return Err(Error::msg(format!("Invalid action for current trade session state")));
+                return Err(Error::msg(format!(
+                    "Invalid action for current trade session state"
+                )));
             }
             let mut new_state_items = (*trade_session.state.items).clone();
             if let Some(trade_items) = new_state_items.get_mut(user_address) {
@@ -182,43 +191,79 @@ impl<T: ChainContext> SharedSessions<T> {
     pub fn accept_trade(&self, session_id: &SessionId, user_address: &str) -> Result<()> {
         let mut sessions = self.internal.lock().unwrap();
         if let Some(trade_session) = sessions.get_mut(session_id) {
-            if !matches!(trade_session.state.status,
+            if !matches!(
+                trade_session.state.status,
                 TradeStatus::Trading | TradeStatus::OneUserAccepted
             ) {
-                return Err(Error::msg(format!("Invalid action for current trade session state")));
+                return Err(Error::msg(format!(
+                    "Invalid action for current trade session state"
+                )));
             }
             if let Some(user_accepted) = &trade_session.state.user_acted {
                 if *user_accepted != user_address {
                     trade_session.state.user_acted = None;
-                trade_session.state.status = TradeStatus::Accepted;
+                    trade_session.state.status = TradeStatus::Accepted;
                 }
             } else {
                 trade_session.state.user_acted = Some(String::from(user_address));
                 trade_session.state.status = TradeStatus::OneUserAccepted;
             }
-            
         } else {
             return Err(Error::msg(format!("Session {} not found", session_id)));
         }
         Ok(())
     }
 
-    pub async fn get_transaction_to_sign(&self, session_id: &SessionId, user_address: &str) -> Result<()> {
-        let mut sessions = self.internal.lock().unwrap();
-        if let Some(trade_session) = sessions.get_mut(session_id) {
-            if !matches!(trade_session.state.status,
+    // The reason the locking in this transaction is done twice is because we use Mutex without Send
+    // and so we cannot use .await during lock
+    // First we lock and check conditions for creating transaction
+    // If needed, we create transaction
+    // we lock again and save the transaction to session trade state
+    pub async fn get_transaction_to_sign(
+        &self,
+        session_id: &SessionId,
+        user_address: &str,
+    ) -> Result<()> {
+        let (need_create_tx, items_to_process) = {
+            let sessions = self.internal.lock().unwrap();
+            let trade_session = sessions
+                .get(session_id)
+                .ok_or_else(|| Error::msg("No session found with given session_id"))?;
+            if !matches!(
+                trade_session.state.status,
                 TradeStatus::Accepted | TradeStatus::TransactionCreated
             ) {
-                return Err(Error::msg(format!("Invalid action for current trade session state")));
+                return Err(Error::msg(format!(
+                    "Invalid action for current trade session state"
+                )));
             }
-            // only create transaction once, act idempotently
+
+            let need_create = trade_session.state.user_acted.is_none();
+            let items_clone = Arc::clone(&trade_session.state.items);
+            (need_create, items_clone)
+        };
+
+        let tx_created = if need_create_tx {
+            Some(
+                self.transaction_service
+                    .create_transaction(items_to_process)
+                    .await?,
+            )
+        } else {
+            None
+        };
+
+        if let Some(tx) = tx_created {
+            let mut sessions = self.internal.lock().unwrap();
+            let trade_session = sessions
+                .get_mut(session_id)
+                .ok_or_else(|| Error::msg("Session disappeared unexpectedly"))?;
+
             if trade_session.state.user_acted.is_none() {
-                let tx = self.transaction_service.create_transaction(Arc::clone(&trade_session.state.items)).await?;
                 trade_session.state.tx = Some(tx);
-                trade_session.state.user_acted = Some(String::from(user_address));
+                trade_session.state.user_acted = Some(user_address.to_string());
                 trade_session.state.status = TradeStatus::TransactionCreated;
             }
-            
         }
 
         Ok(())
@@ -226,7 +271,6 @@ impl<T: ChainContext> SharedSessions<T> {
     pub fn sign_transaction(&self, session_id: &SessionId, signature: String) -> Result<()> {
         Ok(())
     }
-
 }
 
 #[derive(Default)]
@@ -240,7 +284,7 @@ pub struct TradeState {
     pub items: Arc<HashMap<String, HashMap<String, Decimal>>>,
     pub user_acted: Option<String>,
     pub status: TradeStatus,
-    pub tx: Option<Transaction>
+    pub tx: Option<Transaction>,
 }
 
 #[derive(Clone, Debug, Display, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -251,7 +295,7 @@ pub enum TradeStatus {
     Accepted,
     TransactionCreated,
     OneUserSigned,
-    TransactionSent
+    TransactionSent,
 }
 
 #[cfg(test)]
@@ -263,7 +307,6 @@ mod tests {
     use tokio::sync::mpsc;
     use uuid::Uuid;
 
-
     #[tokio::test]
     async fn test_get_transaction_to_sign_possible_in_accepted_state() {
         let token_amount_cache = Arc::new(TokenAmountCache::init());
@@ -272,8 +315,9 @@ mod tests {
         let token_a = String::from("FKqe4pSujn57nL8JD62mYfwsnJ6bE9HCr5wr6C7nBzGM");
         let token_b = String::from("HBc27s2MjdMK8Bg46KzKBuZAk1EvTioTKVaxxcnn1hJW");
 
-        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
-
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(
+            TestChainContext {},
+        )));
 
         token_amount_cache.insert_token_amounts(
             user_address1.clone(),
@@ -291,20 +335,12 @@ mod tests {
         shared.add_client(session_id, connection_id, tx);
 
         // Add tokens for user "Alice"
-        let result = shared.add_tokens_offer(
-            &session_id,
-            &user_address1,
-            token_a.clone(),
-            dec!(0.1001),
-        );
+        let result =
+            shared.add_tokens_offer(&session_id, &user_address1, token_a.clone(), dec!(0.1001));
         assert!(result.is_ok());
 
-        let result = shared.add_tokens_offer(
-            &session_id,
-            &user_address2,
-            token_b.clone(),
-            dec!(0.5),
-        );
+        let result =
+            shared.add_tokens_offer(&session_id, &user_address2, token_b.clone(), dec!(0.5));
         assert!(result.is_ok());
 
         let _ = shared.accept_trade(&session_id, &user_address1);
@@ -314,10 +350,12 @@ mod tests {
             let sessions = shared.internal.lock().unwrap();
             let session = sessions.get(&session_id).expect("Session not found");
             assert_eq!(session.state.user_acted, None);
-            assert_eq!(session.state.status, TradeStatus::Accepted);        
+            assert_eq!(session.state.status, TradeStatus::Accepted);
         }
 
-        let result = shared.get_transaction_to_sign(&session_id, &user_address1).await;
+        let result = shared
+            .get_transaction_to_sign(&session_id, &user_address1)
+            .await;
 
         if let Err(e) = result {
             println!("Error: {:#?}", e.backtrace());
@@ -325,14 +363,34 @@ mod tests {
         {
             let sessions = shared.internal.lock().unwrap();
             let session = sessions.get(&session_id).expect("Session not found");
-            assert_eq!(session.state.user_acted, Some(user_address1.clone()), "User acted missing after transaction created");
-            assert_eq!(session.state.status, TradeStatus::TransactionCreated, "Transaction should be in TransactionCreated state");    
+            assert_eq!(
+                session.state.user_acted,
+                Some(user_address1.clone()),
+                "User acted missing after transaction created"
+            );
+            assert_eq!(
+                session.state.status,
+                TradeStatus::TransactionCreated,
+                "Transaction should be in TransactionCreated state"
+            );
             let tx = session.state.tx.clone().unwrap();
             assert_eq!(tx.message().account_keys.len(), 9);
-            assert!(tx.message().account_keys.contains(&Pubkey::from_str(&user_address1).unwrap()));
-            assert!(tx.message().account_keys.contains(&Pubkey::from_str(&user_address2).unwrap()));
-            assert!(tx.message().account_keys.contains(&Pubkey::from_str(&token_a).unwrap()));
-            assert!(tx.message().account_keys.contains(&Pubkey::from_str(&token_b).unwrap()));
+            assert!(tx
+                .message()
+                .account_keys
+                .contains(&Pubkey::from_str(&user_address1).unwrap()));
+            assert!(tx
+                .message()
+                .account_keys
+                .contains(&Pubkey::from_str(&user_address2).unwrap()));
+            assert!(tx
+                .message()
+                .account_keys
+                .contains(&Pubkey::from_str(&token_a).unwrap()));
+            assert!(tx
+                .message()
+                .account_keys
+                .contains(&Pubkey::from_str(&token_b).unwrap()));
 
             println!("Tx message: {:#?}", tx.message());
         }
@@ -341,7 +399,9 @@ mod tests {
     #[tokio::test]
     async fn test_accept_trade_only_possible_in_trading_or_oneuseraccepted_status() {
         let token_amount_cache = Arc::new(TokenAmountCache::init());
-        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(
+            TestChainContext {},
+        )));
         let user_address1 = String::from("Alice");
 
         token_amount_cache.insert_token_amounts(
@@ -365,21 +425,23 @@ mod tests {
         assert!(result.is_ok());
 
         let _ = shared.accept_trade(&session_id, &user_address1);
-       
 
         // states that should not allow changing token offers
-        for trade_status in vec![TradeStatus::Accepted, TradeStatus::TransactionCreated, TradeStatus::OneUserSigned, TradeStatus::TransactionSent]
-        {
+        for trade_status in vec![
+            TradeStatus::Accepted,
+            TradeStatus::TransactionCreated,
+            TradeStatus::OneUserSigned,
+            TradeStatus::TransactionSent,
+        ] {
             //change trade status
             {
                 let mut sessions = shared.internal.lock().unwrap();
                 let session = sessions.get_mut(&session_id).expect("Session not found");
                 session.state.status = trade_status;
             }
-            
+
             let result = shared.accept_trade(&session_id, &user_address1);
             assert!(result.is_err());
-    
         }
     }
 
@@ -387,7 +449,9 @@ mod tests {
     async fn test_trade_must_be_mutable_only_in_trading_or_oneuseraccepted_status() {
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         let user_address1 = String::from("Alice");
-        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(
+            TestChainContext {},
+        )));
 
         token_amount_cache.insert_token_amounts(
             user_address1.clone(),
@@ -410,15 +474,14 @@ mod tests {
         assert!(result.is_ok());
 
         // states that allow mutability
-        for trade_status in vec![TradeStatus::Trading, TradeStatus::OneUserAccepted]
-        {
+        for trade_status in vec![TradeStatus::Trading, TradeStatus::OneUserAccepted] {
             //change trade status
             {
                 let mut sessions = shared.internal.lock().unwrap();
                 let session = sessions.get_mut(&session_id).expect("Session not found");
                 session.state.status = trade_status;
             }
-            
+
             let result = shared.add_tokens_offer(
                 &session_id,
                 &user_address1,
@@ -437,15 +500,19 @@ mod tests {
         }
 
         // states that should not allow changing token offers
-        for trade_status in vec![TradeStatus::Accepted, TradeStatus::TransactionCreated, TradeStatus::OneUserSigned, TradeStatus::TransactionSent]
-        {
+        for trade_status in vec![
+            TradeStatus::Accepted,
+            TradeStatus::TransactionCreated,
+            TradeStatus::OneUserSigned,
+            TradeStatus::TransactionSent,
+        ] {
             //change trade status
             {
                 let mut sessions = shared.internal.lock().unwrap();
                 let session = sessions.get_mut(&session_id).expect("Session not found");
                 session.state.status = trade_status;
             }
-            
+
             let result = shared.add_tokens_offer(
                 &session_id,
                 &user_address1,
@@ -469,8 +536,9 @@ mod tests {
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         let user_address1 = String::from("Alice");
         let user_address2 = String::from("Bob");
-        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
-
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(
+            TestChainContext {},
+        )));
 
         token_amount_cache.insert_token_amounts(
             user_address1.clone(),
@@ -495,7 +563,6 @@ mod tests {
         let _ = shared.accept_trade(&session_id, &user_address1);
         let _ = shared.accept_trade(&session_id, &user_address2);
 
-
         {
             let sessions = shared.internal.lock().unwrap();
             let session = sessions.get(&session_id).expect("Session not found");
@@ -518,7 +585,9 @@ mod tests {
     async fn test_accept_trade() {
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         let user_address = String::from("Alice");
-        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(
+            TestChainContext {},
+        )));
 
         token_amount_cache.insert_token_amounts(
             user_address.clone(),
@@ -564,7 +633,9 @@ mod tests {
     async fn test_offering_token_should_revert_accept() {
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         let user_address = String::from("Alice");
-        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(
+            TestChainContext {},
+        )));
 
         token_amount_cache.insert_token_amounts(
             user_address.clone(),
@@ -605,12 +676,8 @@ mod tests {
             );
         }
 
-        let result = shared.add_tokens_offer(
-            &session_id,
-            &user_address,
-            "TokenA".to_string(),
-            dec!(1.00),
-        );
+        let result =
+            shared.add_tokens_offer(&session_id, &user_address, "TokenA".to_string(), dec!(1.00));
         assert!(result.is_ok());
 
         {
@@ -630,14 +697,15 @@ mod tests {
                 dec!(14.37)
             );
         }
-
     }
 
     #[tokio::test]
     async fn test_withdrawing_token_should_revert_accept() {
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         let user_address = String::from("Alice");
-        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(
+            TestChainContext {},
+        )));
 
         token_amount_cache.insert_token_amounts(
             user_address.clone(),
@@ -678,12 +746,8 @@ mod tests {
             );
         }
 
-        let result = shared.withdraw_tokens(
-            &session_id,
-            &user_address,
-            "TokenA".to_string(),
-            dec!(0.37),
-        );
+        let result =
+            shared.withdraw_tokens(&session_id, &user_address, "TokenA".to_string(), dec!(0.37));
         assert!(result.is_ok());
 
         {
@@ -702,14 +766,15 @@ mod tests {
                 dec!(13.0)
             );
         }
-
     }
 
     #[tokio::test]
     async fn test_second_user_accept_should_move_trade_state_to_accepted() {
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         let user_address = String::from("Alice");
-        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(
+            TestChainContext {},
+        )));
 
         token_amount_cache.insert_token_amounts(
             user_address.clone(),
@@ -752,7 +817,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_client() {
-        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(
+            TestChainContext {},
+        )));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
@@ -768,7 +835,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_client() {
-        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(
+            TestChainContext {},
+        )));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
@@ -787,7 +856,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_broadcast_current_state() {
-        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(
+            TestChainContext {},
+        )));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
@@ -807,8 +878,18 @@ mod tests {
 
         match (msg1, msg2) {
             (
-                WebsocketMessage::TradeStateUpdate { offers: _, user_acted: _, status: _ , tx: _},
-                WebsocketMessage::TradeStateUpdate { offers: _ , user_acted: _, status: _, tx: _},
+                WebsocketMessage::TradeStateUpdate {
+                    offers: _,
+                    user_acted: _,
+                    status: _,
+                    tx: _,
+                },
+                WebsocketMessage::TradeStateUpdate {
+                    offers: _,
+                    user_acted: _,
+                    status: _,
+                    tx: _,
+                },
             ) => {
                 // Just ensuring that both got the correct variant
             }
@@ -818,7 +899,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_tokens_offer() {
-        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(
+            TestChainContext {},
+        )));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         let user_address = String::from("Alice");
         token_amount_cache.insert_token_amounts(
@@ -890,7 +973,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_withdraw_tokens() {
-        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(
+            TestChainContext {},
+        )));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         let shared = SharedSessions::new(token_amount_cache, transaction_service);
         let session_id = Uuid::new_v4();
@@ -913,12 +998,8 @@ mod tests {
         }
 
         // Withdraw 50 tokens from Alice's TokenA
-        let result = shared.withdraw_tokens(
-            &session_id,
-            &user_address,
-            "TokenA".to_string(),
-            dec!(50),
-        );
+        let result =
+            shared.withdraw_tokens(&session_id, &user_address, "TokenA".to_string(), dec!(50));
         assert!(result.is_ok());
 
         {
@@ -930,12 +1011,8 @@ mod tests {
         }
 
         // Withdraw more tokens than available should not go below zero
-        let result = shared.withdraw_tokens(
-            &session_id,
-            &user_address,
-            "TokenA".to_string(),
-            dec!(100),
-        );
+        let result =
+            shared.withdraw_tokens(&session_id, &user_address, "TokenA".to_string(), dec!(100));
         assert!(result.is_ok());
 
         {
@@ -946,12 +1023,8 @@ mod tests {
         }
 
         // Withdrawing a token that does not exist
-        let result: std::result::Result<(), Error> = shared.withdraw_tokens(
-            &session_id,
-            &user_address,
-            "TokenB".to_string(),
-            dec!(10),
-        );
+        let result: std::result::Result<(), Error> =
+            shared.withdraw_tokens(&session_id, &user_address, "TokenB".to_string(), dec!(10));
         // Should insert token with requested amount (but subtracting should yield 0)
         assert!(result.is_ok());
 
@@ -970,7 +1043,9 @@ mod tests {
         let user_address = "Alice";
         let token_mint = "TokenA";
         let available_tokens = dec!(10);
-        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(
+            TestChainContext {},
+        )));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         token_amount_cache.insert_token_amounts(
             user_address.to_owned(),
@@ -1007,7 +1082,9 @@ mod tests {
         let user_address = "Alice";
         let token_mint = "TokenA";
         let available_tokens = dec!(10);
-        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(
+            TestChainContext {},
+        )));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         token_amount_cache.insert_token_amounts(
             user_address.to_owned(),
@@ -1050,7 +1127,9 @@ mod tests {
         let user_address = "Alice";
         let token_mint = "TokenA";
         let available_tokens = dec!(10);
-        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(
+            TestChainContext {},
+        )));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         token_amount_cache.insert_token_amounts(
             user_address.to_owned(),
@@ -1093,7 +1172,9 @@ mod tests {
         let user_address = "Alice";
         let token_mint = "TokenA";
         let available_tokens = dec!(10);
-        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(
+            TestChainContext {},
+        )));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         token_amount_cache.insert_token_amounts(
             user_address.to_owned(),
@@ -1109,12 +1190,8 @@ mod tests {
         let result =
             shared.add_tokens_offer(&session_id, &user_address, token_mint.to_string(), dec!(4));
         assert!(result.is_ok());
-        let result = shared.withdraw_tokens(
-            &session_id,
-            &user_address,
-            token_mint.to_string(),
-            dec!(-4),
-        );
+        let result =
+            shared.withdraw_tokens(&session_id, &user_address, token_mint.to_string(), dec!(-4));
 
         assert!(result.is_ok());
 
@@ -1138,7 +1215,9 @@ mod tests {
         let user_address = "Alice";
         let token_mint = "TokenA";
         let available_tokens = dec!(10);
-        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(
+            TestChainContext {},
+        )));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         token_amount_cache.insert_token_amounts(
             user_address.to_owned(),
@@ -1151,12 +1230,8 @@ mod tests {
         let (tx, _rx) = mpsc::channel(10);
         shared.add_client(session_id, connection_id, tx);
 
-        let result = shared.withdraw_tokens(
-            &session_id,
-            &user_address,
-            token_mint.to_string(),
-            dec!(4),
-        );
+        let result =
+            shared.withdraw_tokens(&session_id, &user_address, token_mint.to_string(), dec!(4));
 
         assert!(result.is_err());
     }
@@ -1166,7 +1241,9 @@ mod tests {
         let user_address = "Alice";
         let token_mint = "TokenA";
         let available_tokens = dec!(10);
-        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(TestChainContext{})));
+        let transaction_service = Arc::new(TransactionService::<TestChainContext>::new(Arc::new(
+            TestChainContext {},
+        )));
         let token_amount_cache = Arc::new(TokenAmountCache::init());
         token_amount_cache.insert_token_amounts(
             user_address.to_owned(),
@@ -1183,27 +1260,15 @@ mod tests {
             shared.add_tokens_offer(&session_id, &user_address, token_mint.to_string(), dec!(4));
         assert!(result.is_ok());
 
-        let result = shared.withdraw_tokens(
-            &session_id,
-            &user_address,
-            token_mint.to_string(),
-            dec!(3),
-        );
+        let result =
+            shared.withdraw_tokens(&session_id, &user_address, token_mint.to_string(), dec!(3));
         assert!(result.is_ok());
 
-        let result = shared.withdraw_tokens(
-            &session_id,
-            &user_address,
-            token_mint.to_string(),
-            dec!(3),
-        );
+        let result =
+            shared.withdraw_tokens(&session_id, &user_address, token_mint.to_string(), dec!(3));
         assert!(result.is_ok());
-        let result = shared.withdraw_tokens(
-            &session_id,
-            &user_address,
-            token_mint.to_string(),
-            dec!(3),
-        );
+        let result =
+            shared.withdraw_tokens(&session_id, &user_address, token_mint.to_string(), dec!(3));
         assert!(result.is_ok());
 
         //should delete tokens state if amount drops to zero

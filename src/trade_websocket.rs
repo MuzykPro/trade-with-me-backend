@@ -1,6 +1,6 @@
 use axum::extract::ws::{Message, WebSocket};
 use futures::{SinkExt, StreamExt};
-use log::{debug, info};
+use log::{debug, error, info};
 use rust_decimal::prelude::*;
 use serde::{Deserialize, Serialize};
 use solana_sdk::transaction::Transaction;
@@ -53,12 +53,15 @@ pub async fn handle_socket<T: ChainContext + Sync + Send + 'static>(
                                     amount,
                                 } => {
                                     //TODO handle errors
-                                    let _ = sessions.add_tokens_offer(
+                                    let result = sessions.add_tokens_offer(
                                         &session_id,
                                         &user_address,
                                         token_mint,
                                         amount,
                                     );
+                                    if let Err(e) = result {
+                                        error!("Error while adding tokens offer: {}", e);
+                                    }
                                     sessions.broadcast_current_state(&session_id);
                                 }
                                 WebsocketMessage::WithdrawTokens {
@@ -67,30 +70,39 @@ pub async fn handle_socket<T: ChainContext + Sync + Send + 'static>(
                                     amount,
                                 } => {
                                     //TODO handle errors
-                                    let _ = sessions.withdraw_tokens(
+                                    let result = sessions.withdraw_tokens(
                                         &session_id,
                                         &user_address,
                                         token_mint,
                                         amount,
                                     );
+                                    if let Err(e) = result {
+                                        error!("Error while withdrawing tokens offer: {}", e);
+                                    }
                                     sessions.broadcast_current_state(&session_id);
                                 }
                                 WebsocketMessage::AcceptTrade { user_address
                                  } => {
                                     //TODO handle errors
-                                    let _ = sessions.accept_trade(&session_id, &user_address);
+                                    let result = sessions.accept_trade(&session_id, &user_address);
+                                    if let Err(e) = result {
+                                        error!("Error while accepting offer: {}", e);
+                                    }
                                     sessions.broadcast_current_state(&session_id);
                                  }
                                  WebsocketMessage::GetTransactionToSign { user_address
                                  } => {
                                     //TODO handle errors
-                                    let _ = sessions.get_transaction_to_sign(&session_id, &user_address);
+                                    let result = sessions.get_transaction_to_sign(&session_id, &user_address).await;
+                                    if let Err(e) = result {
+                                        error!("Error while getting transaction to sign: {}", e);
+                                    }
                                     sessions.broadcast_current_state(&session_id);
                                  }
                                  WebsocketMessage::SignedTransaction { user_address, signature
                                  } => {
                                     //TODO handle errors
-                                    // let _ = sessions.sign_transaction(&session_id, &signature);
+                                    let _ = sessions.sign_transaction(&session_id, signature);
                                     sessions.broadcast_current_state(&session_id);
                                  }
                                 _ => {}

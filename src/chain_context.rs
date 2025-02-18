@@ -5,7 +5,7 @@ use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::{hash::Hash, pubkey::Pubkey};
 
 pub trait ChainContext {
-    async fn get_latest_blockhash(&self) -> Result<Hash>;
+    fn get_latest_blockhash(&self) -> impl std::future::Future<Output = Result<Hash>> + std::marker::Send;
     fn get_trade_with_me_program_id(&self) -> Pubkey;
 }
 
